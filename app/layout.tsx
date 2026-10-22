@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "World Population, Live",
+  title: "World Pulse — A World in Motion",
   description:
-    "A live dotted-map dashboard of world population, births, deaths and migration, modelled from UN World Population Prospects 2024.",
+    "Explore population, GDP, national debt, homicides, and CO₂ through an interactive world map, real published data, and continuously moving estimates.",
 };
 
 // Runs before first paint so a stored theme choice never flashes the wrong theme.

@@ -15,6 +15,7 @@ export const METRICS: {
   short: string;
   eyebrow: string;
   color: string;
+  darkColor: string;
   description: string;
 }[] = [
   {
@@ -22,7 +23,8 @@ export const METRICS: {
     label: "Population",
     short: "01",
     eyebrow: "The human story",
-    color: "#319b79",
+    color: "#247b60",
+    darkColor: "#4dba94",
     description: "Eight billion lives. One shared planet.",
   },
   {
@@ -30,7 +32,8 @@ export const METRICS: {
     label: "GDP",
     short: "02",
     eyebrow: "The world's output",
-    color: "#5e83dc",
+    color: "#3d63b5",
+    darkColor: "#87a8ec",
     description: "The value we create, every passing second.",
   },
   {
@@ -38,7 +41,8 @@ export const METRICS: {
     label: "National debt",
     short: "03",
     eyebrow: "The balance we carry",
-    color: "#ce9250",
+    color: "#94651f",
+    darkColor: "#d5aa70",
     description: "Public obligations, seen in a global context.",
   },
   {
@@ -46,7 +50,8 @@ export const METRICS: {
     label: "Homicides",
     short: "04",
     eyebrow: "A measure of safety",
-    color: "#c26f80",
+    color: "#a84d62",
+    darkColor: "#d990a2",
     description: "Understanding violence through reported data.",
   },
   {
@@ -54,7 +59,8 @@ export const METRICS: {
     label: "CO₂ emissions",
     short: "05",
     eyebrow: "Our atmospheric footprint",
-    color: "#8c82c4",
+    color: "#7060a8",
+    darkColor: "#aaa0db",
     description: "The emissions adding up around us.",
   },
 ];
