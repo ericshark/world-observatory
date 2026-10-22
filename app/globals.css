@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+/*
+ * Light is the default. Dark applies when the OS asks for it (unless the
+ * viewer picked light) or when the viewer picked dark explicitly.
+ * Series colors are validated categorical slots, stepped separately per mode.
+ */
+:root {
+  color-scheme: light;
+  --background: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-secondary: #52514e;
+  --ink-muted: #6b6a65;
+  --card: rgba(11, 11, 11, 0.04);
+  --card-hover: rgba(11, 11, 11, 0.07);
+  --border: rgba(11, 11, 11, 0.1);
+  --dot: #c9c8c0;
+  --dot-dimmed: #e6e5df;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #6250d6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --background: #0a0a0a;
+    --ink: #f0efec;
+    --ink-secondary: #c3c2b7;
+    --ink-muted: #9a998f;
+    --card: rgba(255, 255, 255, 0.05);
+    --card-hover: rgba(255, 255, 255, 0.08);
+    --border: rgba(255, 255, 255, 0.1);
+    --dot: #3a3a37;
+    --dot-dimmed: #1f1f1d;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #0a0a0a;
+  --ink: #f0efec;
+  --ink-secondary: #c3c2b7;
+  --ink-muted: #9a998f;
+  --card: rgba(255, 255, 255, 0.05);
+  --card-hover: rgba(255, 255, 255, 0.08);
+  --border: rgba(255, 255, 255, 0.1);
+  --dot: #3a3a37;
+  --dot-dimmed: #1f1f1d;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-background: var(--background);
+  --color-ink: var(--ink);
+  --color-ink-secondary: var(--ink-secondary);
+  --color-ink-muted: var(--ink-muted);
+  --color-card: var(--card);
+  --color-card-hover: var(--card-hover);
+  --color-border: var(--border);
+}
+
+body {
+  background: var(--background);
+  color: var(--ink);
+  font-family: var(--font-mono), ui-monospace, monospace;
+}
+
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+    translate: 0 4px;
+  }
+}
+
+.tooltip-enter {
+  animation: tooltip-in 120ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip-enter {
+    animation: none;
+  }
+}
