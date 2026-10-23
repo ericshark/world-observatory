@@ -30,8 +30,8 @@ const entity: Entity = {
   },
 };
 test("logarithmic and linear legends use the exact country color scale", () => {
-  for (const linear of [false, true]) {
-    const scale = createHeatScale([0, 1, 100, 1_000_000, null], linear);
+  for (const kind of ["log", "linear"] as const) {
+    const scale = createHeatScale([0, 1, 100, 1_000_000, null], kind);
     scale.ticks.forEach((tick, i) =>
       assert.equal(scale.color(tick), heatColor(i / 4)),
     );
@@ -96,4 +96,19 @@ test("a zero observation does not compress ordinary economies into the warm end"
   ]);
   assert.ok(scale.ticks[2] > 1_000_000_000);
   assert.ok(scale.ticks[2] < 10_000_000_000);
+});
+
+test("clipped scales keep outliers at the ends and accept negative values", () => {
+  const values = [-3, ...Array.from({ length: 98 }, (_, i) => i / 10), 250];
+  const scale = createHeatScale(values, "clipped");
+  assert.equal(scale.clippedLow, true);
+  assert.equal(scale.clippedHigh, true);
+  assert.ok(scale.ticks[0] > -3 && scale.ticks[4] < 250);
+  assert.equal(scale.color(250), heatColor(1));
+  assert.equal(scale.color(-3), heatColor(0));
+  scale.ticks.forEach((tick, i) =>
+    assert.equal(scale.color(tick), heatColor(i / 4)),
+  );
+  assert.equal(createHeatScale([-1, 2], "log").count, 1);
+  assert.equal(createHeatScale([-1, 2], "linear").count, 2);
 });

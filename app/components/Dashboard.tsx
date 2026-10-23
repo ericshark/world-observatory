@@ -193,7 +193,10 @@ export default function Dashboard({
   );
   const heatScale = useMemo(
     () =>
-      createHeatScale(mapValues.values(), mapSelection.measure === "debtRatio"),
+      createHeatScale(
+        mapValues.values(),
+        mapSelection.measure === "debtRatio" ? "linear" : "log",
+      ),
     [mapValues, mapSelection],
   );
   const colors = useMemo(
