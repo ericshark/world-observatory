@@ -74,30 +74,26 @@ export default function MetricCounter({
         }
       };
       renderDebt(started);
-      return subscribeFrame(renderDebt);
+      // Numeric changes remain live even when OS motion effects are disabled.
+      return subscribeFrame(renderDebt, false);
     }
     const offset =
       last.current === null
         ? 0
         : last.current - valueAt(model, selection, started);
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
     let signature = "";
     let columns: { wheel: HTMLElement; place: number }[] = [];
     let lastText = "";
     const render = (now: number) => {
       const target = valueAt(model, selection, now);
-      const value =
-        target +
-        (reduced.matches
-          ? 0
-          : blendRevision(offset, 0, (now - started) / 1800));
+      const value = target + blendRevision(offset, 0, (now - started) / 1800);
       last.current = value;
       const text = formatNumber(value, compact);
       if (text !== lastText) {
         element.setAttribute("aria-label", text);
         lastText = text;
       }
-      if (compact || reduced.matches || model.historical) {
+      if (compact || model.historical) {
         element.textContent = text;
         signature = "";
         return;
@@ -133,7 +129,7 @@ export default function MetricCounter({
         column.wheel.style.transform = `translateY(${-digitPosition(rolling, column.place)}em)`;
     };
     render(started);
-    return subscribeFrame(render);
+    return subscribeFrame(render, false);
   }, [model, selection, compact]);
   return (
     <span
