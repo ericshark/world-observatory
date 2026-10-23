@@ -10,7 +10,11 @@ export type SeriesId =
   | "gdp"
   | "debtRatio"
   | "homicideRate"
-  | "co2";
+  | "co2"
+  | "lifeExpectancy"
+  | "urbanization"
+  | "inflation"
+  | "unemployment";
 export interface Observation {
   year: number;
   value: number;

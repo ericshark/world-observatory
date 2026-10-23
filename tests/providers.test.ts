@@ -82,9 +82,13 @@ test("provider joins normalize CO2 megatonnes, retain zero and negative migratio
       wbRow("USA", "SP.POP.TOTL", null),
       wbRow("USA", "SP.POP.TOTL", "100"),
       wbRow("WLD", "SP.POP.TOTL", 10000),
+      wbRow("USA", "FP.CPI.TOTL.ZG", -1.2),
+      wbRow("USA", "SL.UEM.TOTL.ZS", -3),
     ],
     entities,
   );
+  assert.equal(e.series.inflation?.[0].value, -1.2);
+  assert.equal(e.series.unemployment, undefined);
   assert.equal(e.series.co2?.[0].value, 4_200_000);
   assert.equal(e.series.migration?.[0].value, -50);
   assert.equal(e.series.birthRate?.[0].value, 0);
@@ -129,6 +133,11 @@ test("snapshot validation rejects nonfinite values, duplicates, and missing worl
   const copy = structuredClone(snapshot);
   copy.world.series.population = [{ year: 2024, value: Infinity }];
   assert.equal(validateDataset(copy), false);
+  const signed = structuredClone(snapshot);
+  signed.world.series.inflation = [{ year: 2024, value: -2 }];
+  assert.equal(validateDataset(signed), true);
+  signed.world.series.lifeExpectancy = [{ year: 2024, value: -2 }];
+  assert.equal(validateDataset(signed), false);
 });
 test("daily cache does not fetch a fresh snapshot", async () => {
   let requests = 0;
@@ -200,7 +209,9 @@ test("complete provider import paginates, converts IMF billions, joins world agg
     longitude: "1",
     latitude: "2",
   }));
-  const countryRows = [...fixtures.map((c) => c.iso3), "WLD"].flatMap((iso) =>
+  let omitAddedIndicators = false;
+  const rowsFor = () =>
+    [...fixtures.map((c) => c.iso3), "WLD"].flatMap((iso) =>
     [2023, 2024].flatMap((year) => [
       wbRow(iso, "SP.POP.TOTL", 1_000_000, String(year)),
       wbRow(iso, "SP.DYN.CBRT.IN", 10, String(year)),
@@ -208,6 +219,14 @@ test("complete provider import paginates, converts IMF billions, joins world agg
       wbRow(iso, "SM.POP.NETM", 0, String(year)),
       wbRow(iso, "VC.IHR.PSRC.P5", 2, String(year)),
       wbRow(iso, "EN.GHG.CO2.MT.CE.AR5", 4, String(year)),
+      ...(omitAddedIndicators
+        ? []
+        : [
+            wbRow(iso, "SP.DYN.LE00.IN", 72.5, String(year)),
+            wbRow(iso, "SP.URB.TOTL.IN.ZS", 56, String(year)),
+            wbRow(iso, "FP.CPI.TOTL.ZG", -0.4, String(year)),
+            wbRow(iso, "SL.UEM.TOTL.ZS", 5.1, String(year)),
+          ]),
     ]),
   );
   let mixedRelease = false;
@@ -251,6 +270,7 @@ test("complete provider import paginates, converts IMF billions, joins world agg
       });
     }
     if (url.includes("mrnev")) return Response.json([{ pages: 1 }, []]);
+    const countryRows = rowsFor();
     return Response.json([
       { pages: 2, lastupdated: "2024-10-01" },
       new URL(url).searchParams.get("page") === "2"
@@ -271,6 +291,14 @@ test("complete provider import paginates, converts IMF billions, joins world agg
     result.countries.some((c) => c.iso3 === "WEOWORLD" || c.iso3 === "WLD"),
     false,
   );
+  assert.equal(result.world.series.inflation?.[0].value, -0.4);
+  assert.equal(result.world.series.lifeExpectancy?.[1].value, 72.5);
+  omitAddedIndicators = true;
+  await assert.rejects(
+    fetchDataset(fetcher, Date.UTC(2024, 9, 20)),
+    /lifeExpectancy coverage/,
+  );
+  omitAddedIndicators = false;
   mixedRelease = true;
   await assert.rejects(
     fetchDataset(fetcher, Date.UTC(2024, 9, 20)),

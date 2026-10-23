@@ -12,7 +12,19 @@ export const WB_INDICATORS: Record<string, SeriesId> = {
   "SM.POP.NETM": "migration",
   "VC.IHR.PSRC.P5": "homicideRate",
   "EN.GHG.CO2.MT.CE.AR5": "co2",
+  "SP.DYN.LE00.IN": "lifeExpectancy",
+  "SP.URB.TOTL.IN.ZS": "urbanization",
+  "FP.CPI.TOTL.ZG": "inflation",
+  "SL.UEM.TOTL.ZS": "unemployment",
 };
+export const ADDED_SERIES: SeriesId[] = [
+  "lifeExpectancy",
+  "urbanization",
+  "inflation",
+  "unemployment",
+];
+/** Series whose observations can legitimately fall below zero. */
+export const SIGNED_SERIES = new Set<SeriesId>(["migration", "inflation"]);
 const WB_BASE = "https://api.worldbank.org/v2";
 const IMF_BASE = "https://www.imf.org/external/datamapper/api/v2";
 type JsonObject = Record<string, unknown>;
@@ -118,7 +130,7 @@ export function applyWorldBank(
       !/^\d{4}$/.test(String(row.date))
     )
       continue;
-    if (key !== "migration" && row.value < 0) continue;
+    if (!SIGNED_SERIES.has(key) && row.value < 0) continue;
     const value = key === "co2" ? row.value * 1_000_000 : row.value;
     const series = (entity.series[key] ??= []);
     const year = Number(row.date);
@@ -188,7 +200,7 @@ export function validateDataset(value: unknown): value is Dataset {
             !finite(obs.year) ||
             !Number.isInteger(obs.year) ||
             !finite(obs.value) ||
-            (key !== "migration" && obs.value < 0) ||
+            (!SIGNED_SERIES.has(key as SeriesId) && obs.value < 0) ||
             years.has(obs.year)
           )
             return false;
@@ -197,7 +209,9 @@ export function validateDataset(value: unknown): value is Dataset {
       }
     }
     const typed = data.countries as Entity[];
-    const minimumCoverage: Record<SeriesId, number> = {
+    // Indicators added after schema version 1 shipped stay optional so older
+    // snapshots and cached datasets remain valid.
+    const minimumCoverage: Partial<Record<SeriesId, number>> = {
       population: 100,
       birthRate: 80,
       deathRate: 80,
@@ -211,7 +225,7 @@ export function validateDataset(value: unknown): value is Dataset {
       Object.entries(minimumCoverage).some(
         ([key, count]) =>
           typed.filter((entity) => entity.series[key as SeriesId]?.length)
-            .length < count,
+            .length < count!,
       )
     )
       return false;
@@ -386,5 +400,10 @@ export async function fetchDataset(
   };
   if (!validateDataset(data))
     throw new Error("Provider dataset failed validation");
+  // Fresh imports must carry every current indicator, even though validation
+  // tolerates older datasets without them.
+  for (const key of ADDED_SERIES)
+    if (data.countries.filter((c) => c.series[key]?.length).length < 100)
+      throw new Error(`Incomplete World Bank ${key} coverage`);
   return data;
 }

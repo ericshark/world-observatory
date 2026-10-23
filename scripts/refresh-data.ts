@@ -22,6 +22,10 @@ for (const key of [
   "debtRatio",
   "homicideRate",
   "co2",
+  "lifeExpectancy",
+  "urbanization",
+  "inflation",
+  "unemployment",
 ] as const) {
   console.log(
     `${key}: ${data.countries.filter((c) => c.series[key]?.length).length} countries`,
