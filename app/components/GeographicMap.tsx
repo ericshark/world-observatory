@@ -1,8 +1,8 @@
 "use client";
 
-import { geoMercator } from "d3-geo";
+import { geoEqualEarth, geoPath, geoContains } from "d3-geo";
+import geography from "../lib/geography";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import dottedMapData from "../data/dotted-map-data.json";
 import { subscribeFrame } from "../lib/clock";
 import { formatMeasure, measureUnit, perSecondFor } from "../lib/metrics";
 import type {
@@ -15,22 +15,15 @@ import { COMPARE_COLORS } from "./HistoryChart";
 
 const W = 1100,
   H = 590;
-const projection = geoMercator()
-  .scale(163)
-  .center([12, 20])
-  .translate([W / 2, H / 2]);
-const dots: { x: number; y: number; iso: string }[] = [];
-const byIso = new Map<string, number[]>();
-for (const [iso, points] of Object.entries(dottedMapData)) {
-  for (const point of points) {
-    const p = projection([point.lon, point.lat]);
-    if (!p || p[0] < 0 || p[0] > W || p[1] < 0 || p[1] > H) continue;
-    const indices = byIso.get(iso) ?? [];
-    indices.push(dots.length);
-    byIso.set(iso, indices);
-    dots.push({ x: p[0], y: p[1], iso });
-  }
-}
+const projection = geoEqualEarth().fitExtent(
+  [
+    [18, 18],
+    [W - 18, H - 18],
+  ],
+  { type: "Sphere" },
+);
+const shapes = geography.features;
+const byIso = new Map(shapes.map((f) => [f.properties.iso, true]));
 interface Camera {
   x: number;
   y: number;
@@ -76,7 +69,7 @@ interface Props {
   onSelect: (iso: string | null) => void;
   now: number;
 }
-export default function DottedMap(props: Props) {
+export default function GeographicMap(props: Props) {
   const { countries, values, models, selection, selectedIso, onSelect, now } =
     props;
   const container = useRef<HTMLDivElement>(null);
@@ -200,10 +193,6 @@ export default function DottedMap(props: Props) {
       );
       dirty.current = true;
     };
-    const pulses: { x: number; y: number; start: number; death: boolean }[] =
-      [];
-    let nextPulse = 0;
-    let previousMode = "";
     const drawBase = () => {
       const current = state.current;
       const cam = cameraRef.current;
@@ -259,19 +248,36 @@ export default function DottedMap(props: Props) {
               ),
         );
       }
-      for (const dot of dots) {
-        const pin = current.compare.indexOf(dot.iso);
+      const path = geoPath(projection, b);
+      for (const feature of shapes) {
+        const iso = feature.properties.iso;
+        const pin = current.compare.indexOf(iso);
         const highlighted =
-          dot.iso === current.selectedIso || dot.iso === current.hoverIso;
+          iso === current.selectedIso || iso === current.hoverIso;
         b.globalAlpha =
           current.selectedIso && !highlighted && pin < 0 ? 0.55 : 1;
+        b.beginPath();
+        path(feature);
         b.fillStyle =
           pin >= 0
             ? COMPARE_COLORS[pin]
             : highlighted
-              ? ink
-              : (colors.get(dot.iso) ?? missing);
-        b.fillRect(dot.x, dot.y, 2.45, 2.45);
+              ? accent
+              : (colors.get(iso) ?? missing);
+        b.fill();
+        b.strokeStyle = highlighted ? ink : grid;
+        b.lineWidth = (highlighted ? 1.6 : 0.65) / cam.k;
+        b.stroke();
+        if (cam.k >= 2.5 && path.area(feature) * cam.k * cam.k > 2500) {
+          const point = projection(feature.properties.label);
+          if (point) {
+            b.fillStyle = ink;
+            b.font = `500 ${10 / cam.k}px sans-serif`;
+            b.textAlign = "center";
+            b.fillText(feature.properties.name, point[0], point[1]);
+            b.textAlign = "start";
+          }
+        }
       }
       b.globalAlpha = 1;
       for (const locator of locators) {
@@ -314,8 +320,7 @@ export default function DottedMap(props: Props) {
       }
       dirty.current = false;
     };
-    const draw = (time: number) => {
-      const current = state.current;
+    const draw = () => {
       // Accent can change with a metric switch without a theme change.
       const nextAccent = dirty.current
         ? readCssColor("--accent", element)
@@ -328,77 +333,6 @@ export default function DottedMap(props: Props) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, target.width, target.height);
       ctx.drawImage(base, 0, 0);
-      const mode = `${current.selection.metric}-${current.selection.populationView}`;
-      if (mode !== previousMode) {
-        pulses.length = 0;
-        previousMode = mode;
-      }
-      const reduced = window.matchMedia(
-        "(prefers-reduced-motion: reduce)",
-      ).matches;
-      if (current.selection.metric !== "population" || reduced) {
-        pulses.length = 0;
-        return;
-      }
-      const cam = cameraRef.current;
-      ctx.setTransform(
-        scale * dpr * cam.k,
-        0,
-        0,
-        scale * dpr * cam.k,
-        cam.x * scale * dpr,
-        cam.y * scale * dpr,
-      );
-      if (time >= nextPulse) {
-        nextPulse = time + 160;
-        const candidates = current.countries.flatMap((country) => {
-          if (!byIso.has(country.iso2)) return [];
-          const m = current.models.get(country.iso2);
-          if (!m) return [];
-          const keys =
-            current.selection.populationView === "population"
-              ? (["birthRate", "deathRate"] as const)
-              : current.selection.populationView === "births"
-                ? (["birthRate"] as const)
-                : (["deathRate"] as const);
-          return keys.map((key) => ({
-            iso: country.iso2,
-            weight:
-              ((country.series[key]?.find((o) => o.year === m.year)?.value ??
-                0) *
-                (m.population ?? 0)) /
-              1000,
-            death: key === "deathRate",
-          }));
-        });
-        const total = candidates.reduce((sum, c) => sum + c.weight, 0);
-        let pick = Math.random() * total;
-        const country = candidates.find((c) => (pick -= c.weight) <= 0);
-        if (country && total > 0) {
-          const indices = byIso.get(country.iso)!;
-          const dot = dots[indices[Math.floor(Math.random() * indices.length)]];
-          if (pulses.length < 24)
-            pulses.push({
-              ...dot,
-              start: time,
-              death: country.death,
-            });
-        }
-      }
-      for (let i = pulses.length - 1; i >= 0; i--) {
-        const pulse = pulses[i],
-          progress = (time - pulse.start) / 1400;
-        if (progress >= 1) {
-          pulses.splice(i, 1);
-          continue;
-        }
-        ctx.globalAlpha = (1 - progress) * 0.65;
-        ctx.strokeStyle = pulse.death ? ink : accent;
-        ctx.lineWidth = 1 / cam.k;
-        const r = (2 + progress * 10) / Math.sqrt(cam.k);
-        ctx.strokeRect(pulse.x - r / 2, pulse.y - r / 2, r, r);
-      }
-      ctx.globalAlpha = 1;
     };
     resize();
     const observer = new ResizeObserver(resize);
@@ -424,12 +358,12 @@ export default function DottedMap(props: Props) {
       y = (point.y - cam.y) / cam.k;
     let best = (12 / Math.sqrt(cam.k)) ** 2,
       iso: string | null = null;
-    for (const dot of dots) {
-      const d = (dot.x - x) ** 2 + (dot.y - y) ** 2;
-      if (d < best && entities.has(dot.iso)) {
-        best = d;
-        iso = dot.iso;
-      }
+    const geographic = projection.invert?.([x, y]);
+    if (geographic) {
+      const feature = shapes.find(
+        (f) => entities.has(f.properties.iso) && geoContains(f, geographic),
+      );
+      if (feature) return feature.properties.iso;
     }
     for (const locator of locators) {
       const d = (locator.point[0] - x) ** 2 + (locator.point[1] - y) ** 2;
@@ -575,13 +509,13 @@ export default function DottedMap(props: Props) {
       >
         <canvas ref={canvas} aria-hidden="true" />
         <span className="map-coordinate coordinate-nw" aria-hidden="true">
-          80° N
+          EQUAL EARTH
         </span>
         <span className="map-coordinate coordinate-sw" aria-hidden="true">
-          60° S
+          50m · NATURAL EARTH
         </span>
         <span className="map-coordinate coordinate-ne" aria-hidden="true">
-          180° E
+          WORLD VIEW
         </span>
         {hover && hovered && (
           <div
@@ -643,15 +577,6 @@ export default function DottedMap(props: Props) {
         </div>
         <div className="map-legend-note">
           <span className="missing-key" /> Unavailable
-          {selection.metric === "population" && (
-            <span className="pulse-note">
-              ◇ Illustrative{" "}
-              {selection.populationView === "population"
-                ? "birth / death"
-                : selection.populationView}{" "}
-              pulses
-            </span>
-          )}
         </div>
       </figcaption>
     </figure>

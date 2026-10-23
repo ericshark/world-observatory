@@ -1,6 +1,6 @@
 # World Pulse
 
-An interactive dotted-map observatory for population, births, deaths, GDP, general-government gross debt, intentional homicides, and CO₂ emissions. Built with Next.js, React, TypeScript, and a canvas map using d3-geo.
+An interactive geographic observatory for population, births, deaths, GDP, general-government gross debt, intentional homicides, and CO₂ emissions. Built with Next.js, React, TypeScript, and a canvas map using d3-geo.
 
 ## Run locally
 
@@ -53,7 +53,7 @@ Unknown values stay unavailable. Countries and economies come from the World Ban
 
 Drag or pinch the map, scroll to zoom around the pointer, or use its controls. When the map has keyboard focus, arrows pan, `+`/`-` zoom, `Home` resets, and `Escape` returns to the world. Country search and ranking buttons provide a keyboard alternative to the canvas. Pin at most three countries to compare annual source history, normalized values, and source years. Metric, subview, measure, period, country, and comparison state are shareable through URL parameters.
 
-Map totals use logarithmic shading; rates and per-person measures use linear shading. Rings represent countries too small for the dotted geometry. Country selection and comparison highlights supersede the heat color. Birth/death pulses sample country rates at capped visual frequency and random locations; they do not identify actual events. Other metrics have no incident pulses.
+Map totals use logarithmic shading; rates and per-person measures use linear shading. The solid Equal Earth map uses bundled Natural Earth v5.1.2 1:50m geometry (see `public/maps/README.md`). Polygon containment drives selection. Rings locate countries too small for geometry, and labels appear when zoomed. Country selection and comparison highlights supersede heat colors. Six worldwide overview cards tick independently; selecting a card returns the main map to worldwide for that statistic. Birth/death cards reset at UTC midnight.
 
 All moving counters derive from wall time, with short interpolation for source revisions in either direction. Values do not drift by accumulating frame increments. A shared animation clock pauses in hidden tabs; reduced motion disables pulses and updates numbers once a second. Charts show actual annual observations, gaps, and dashed forecast segments, with accessible data tables.
 

@@ -33,7 +33,7 @@ import type {
 } from "../lib/metrics-types";
 import { validateDataset } from "../lib/providers";
 import ThemeToggle from "./ThemeToggle";
-import DottedMap from "./DottedMap";
+import GeographicMap from "./GeographicMap";
 import MetricCounter from "./MetricCounter";
 import HistoryChart, { COMPARE_COLORS } from "./HistoryChart";
 
@@ -214,6 +214,50 @@ export default function Dashboard({
     selection.period === "today"
       ? utcDay(now)
       : new Date(now).getUTCFullYear();
+  const overview = [
+    {
+      label: "World population",
+      metric: "population",
+      view: "population",
+      period: "year",
+      unit: "people",
+    },
+    {
+      label: "Births today",
+      metric: "population",
+      view: "births",
+      period: "today",
+      unit: "since UTC midnight",
+    },
+    {
+      label: "Deaths today",
+      metric: "population",
+      view: "deaths",
+      period: "today",
+      unit: "since UTC midnight",
+    },
+    {
+      label: "GDP this year",
+      metric: "gdp",
+      view: "population",
+      period: "year",
+      unit: "USD · output generated",
+    },
+    {
+      label: "Government debt",
+      metric: "debt",
+      view: "population",
+      period: "year",
+      unit: "USD · gross debt stock",
+    },
+    {
+      label: "CO₂ this year",
+      metric: "co2",
+      view: "population",
+      period: "year",
+      unit: "tonnes emitted",
+    },
+  ] as const;
   const counterKey = `${current.iso2}-${selection.metric}-${selection.populationView}-${selection.period}-${periodKey}`;
   return (
     <main
@@ -437,18 +481,26 @@ export default function Dashboard({
               />
             )}
           </div>
-          <div className="summary-history">
-            <div className="section-label">
-              <span>A longer perspective</span>
-              <span>10Y</span>
-            </div>
-            <HistoryChart
-              entities={[current]}
-              selection={selection}
-              forecastFrom={data.forecastFrom}
-              now={now}
-              small
-            />
+          <div className="hero-leaders">
+            <p className="eyebrow">
+              Leading countries · {measureUnit(selection)}
+            </p>
+            {ranked
+              .filter((c) => values.get(c.iso2) != null)
+              .slice(0, 5)
+              .map((country, index) => (
+                <button
+                  type="button"
+                  key={country.iso2}
+                  onClick={() => setSelectedIso(country.iso2)}
+                >
+                  <span className="leader-index">0{index + 1}</span>
+                  <span>{country.name}</span>
+                  <strong>
+                    {formatMeasure(values.get(country.iso2) ?? null, selection)}
+                  </strong>
+                </button>
+              ))}
           </div>
           <p className="estimate-note">
             <span>ⓘ</span>{" "}
@@ -481,7 +533,7 @@ export default function Dashboard({
             </span>
             <span>{coverage} economies with data</span>
           </div>
-          <DottedMap
+          <GeographicMap
             countries={data.countries}
             values={values}
             models={models}
@@ -495,6 +547,65 @@ export default function Dashboard({
             <span>Explore a country to look closer</span>
             <span>Drag to pan · Scroll to zoom</span>
           </div>
+        </div>
+      </section>
+      <section
+        className="overview-section"
+        aria-label="Worldwide live estimates"
+      >
+        <div className="overview-heading">
+          <p className="eyebrow">THE WORLD, RIGHT NOW</p>
+          <span>Worldwide · continuously estimated</span>
+        </div>
+        <div className="live-grid">
+          {overview.map((card) => {
+            const cardSelection: MetricSelection = {
+              metric: card.metric,
+              populationView: card.view,
+              measure: "total",
+              period: card.period,
+            };
+            const cardModel = modelFor(
+              data.world,
+              cardSelection,
+              now,
+              data.forecastFrom,
+            );
+            return (
+              <button
+                className={`live-card ${card.metric === "gdp" || card.metric === "debt" ? "economic-card" : ""}`}
+                type="button"
+                key={card.label}
+                onClick={() => {
+                  setSelection(cardSelection);
+                  setSelectedIso(null);
+                  setQuery("");
+                }}
+              >
+                <span className="live-card-label">
+                  {card.label}
+                  <span aria-hidden="true">↗</span>
+                </span>
+                <strong>
+                  {(card.metric === "gdp" || card.metric === "debt") &&
+                  cardModel
+                    ? "$"
+                    : ""}
+                  <MetricCounter
+                    model={cardModel}
+                    selection={cardSelection}
+                    compact={false}
+                  />
+                </strong>
+                <span className="live-card-unit">{card.unit}</span>
+                <span className="live-card-source">
+                  {cardModel
+                    ? `${cardModel.year} source${cardModel.forecast ? " · forecast" : cardModel.historical ? " · historical" : " · estimate"}`
+                    : "Unavailable"}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </section>
       <div className="lower-grid">
@@ -819,9 +930,8 @@ export default function Dashboard({
               data.
             </p>
             <p>
-              Map pulses illustrate modeled birth/death rates at random
-              locations within a country. They are not observed events. Chart
-              values are annual source observations or labeled IMF forecasts.
+              Country boundaries use Natural Earth geographic data. Chart values
+              are annual source observations or labeled IMF forecasts.
             </p>
           </div>
         </div>
