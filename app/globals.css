@@ -7,9 +7,8 @@
   --ink-secondary: #99999f;
   --ink-muted: #76767d;
   --border: #242426;
-  --map-low: #424247;
   --map-missing: #202024;
-  --map-grid: #27272b;
+  --map-border: #151e29;
   --accent: #73a0ff;
   --card-hover: #171719;
   --card: #101012;
@@ -22,9 +21,8 @@
   --ink-secondary: #606068;
   --ink-muted: #707078;
   --border: #dcdce0;
-  --map-low: #b5b5bd;
   --map-missing: #dddde0;
-  --map-grid: #c9c9ce;
+  --map-border: #edf0f3;
   --accent: #2654c5;
   --card-hover: #eeeef0;
   --card: #fff;
@@ -647,5 +645,137 @@ footer {
   }
   .live-card:nth-child(n + 3) strong {
     font-size: clamp(20px, 6vw, 35px);
+  }
+}
+
+/* Fast debt digits are replaced in place, never transformed as a whole number. */
+.debt-digit {
+  display: inline-block;
+  width: 0.61em;
+  text-align: center;
+  letter-spacing: 0;
+}
+.debt-separator {
+  display: inline-block;
+}
+.map-viewport {
+  background: radial-gradient(ellipse at 50% 45%, #5983980c, transparent 72%);
+}
+.map-measures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: -5px 0 14px;
+}
+.map-measures button {
+  font: inherit;
+  font-size: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--ink-secondary);
+}
+.map-measures button[aria-pressed="true"] {
+  background: var(--surface);
+  border-color: var(--ink-muted);
+  color: var(--ink);
+}
+.heat-legend {
+  margin-top: 15px;
+  font-size: 9px;
+  color: var(--ink-secondary);
+}
+.legend-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.legend-heading {
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.legend-heading > span:last-child {
+  white-space: nowrap;
+}
+.missing-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: var(--map-missing);
+  border: 1px solid var(--ink-muted);
+  margin-right: 5px;
+}
+.heat-gradient {
+  height: 5px;
+  border-radius: 2px;
+}
+.map-tooltip {
+  transform: none;
+  min-width: 0;
+  width: 230px;
+  max-width: calc(100% - 12px);
+  padding: 10px 12px;
+}
+.map-tooltip p {
+  margin: 4px 0;
+}
+.map-tooltip div strong {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .map-tooltip {
+    font-size: 10px;
+    width: 205px;
+    padding: 8px 10px;
+  }
+  .map-tooltip b {
+    font-size: 15px;
+  }
+}
+
+.legend-ticks {
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+  position: relative;
+  height: 1.5em;
+  display: block;
+}
+.legend-ticks > span {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.legend-ticks > span:nth-child(1) {
+  left: 0;
+  transform: none;
+}
+.legend-ticks > span:nth-child(2) {
+  left: 25%;
+}
+.legend-ticks > span:nth-child(3) {
+  left: 50%;
+}
+.legend-ticks > span:nth-child(4) {
+  left: 75%;
+}
+.legend-ticks > span:nth-child(5) {
+  right: 0;
+  transform: none;
+}
+.legend-ticks.single > span {
+  left: 50%;
+  transform: translateX(-50%);
+}
+@media (max-width: 600px) {
+  .map-tooltip p,
+  .map-tooltip small {
+    font-size: 8px;
+    line-height: 1.4;
+  }
+  .map-tooltip p {
+    margin: 3px 0;
+  }
+  .map-tooltip > small {
+    display: none;
   }
 }

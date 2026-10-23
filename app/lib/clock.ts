@@ -1,12 +1,19 @@
 "use client";
 
-/** One wall-time clock for the canvas and counters; no dashboard-wide React renders. */
+import { MonotonicClock } from "./debt-clock";
+
+/** Shared monotonic clock; no dashboard-wide animation renders. */
 type FrameListener = (now: number, deltaMs: number) => void;
-const listeners = new Set<FrameListener>();
+const listeners = new Map<FrameListener, boolean>();
 let frameId: number | null = null;
 let lastFrame = 0;
 let lastDispatch = 0;
 let motionQuery: MediaQueryList | null = null;
+let clock: MonotonicClock | null = null;
+export function frameNow() {
+  clock ??= new MonotonicClock(Date.now(), performance.now());
+  return clock.now(performance.now());
+}
 
 function loop(frameTime: number) {
   if (document.hidden) {
@@ -14,13 +21,13 @@ function loop(frameTime: number) {
     lastFrame = 0;
     return;
   }
-  const now = Date.now();
-  if (!motionQuery?.matches || !lastFrame || now - lastDispatch >= 1000) {
-    const delta = lastFrame ? frameTime - lastFrame : 0;
-    lastFrame = frameTime;
-    lastDispatch = now;
-    for (const listener of listeners) listener(now, delta);
-  }
+  const now = frameNow();
+  const due = !motionQuery?.matches || !lastFrame || now - lastDispatch >= 1000;
+  const delta = lastFrame ? frameTime - lastFrame : 0;
+  lastFrame = frameTime;
+  if (due) lastDispatch = now;
+  for (const [listener, throttleReduced] of listeners)
+    if (due || !throttleReduced) listener(now, delta);
   frameId = requestAnimationFrame(loop);
 }
 
@@ -35,14 +42,20 @@ function onVisibilityChange() {
     if (frameId !== null) cancelAnimationFrame(frameId);
     frameId = null;
     lastFrame = 0;
-  } else resume();
+  } else {
+    clock?.resume(Date.now(), performance.now());
+    resume();
+  }
 }
-export function subscribeFrame(listener: FrameListener) {
+export function subscribeFrame(
+  listener: FrameListener,
+  throttleReduced = true,
+) {
   if (!listeners.size) {
     motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
     document.addEventListener("visibilitychange", onVisibilityChange);
   }
-  listeners.add(listener);
+  listeners.set(listener, throttleReduced);
   resume();
   return () => {
     listeners.delete(listener);

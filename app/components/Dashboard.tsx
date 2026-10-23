@@ -11,16 +11,19 @@ import {
   utcDay,
   valueAt,
 } from "../lib/metrics";
-import {
-  COUNTERS,
-  normalizeSelection,
-  COUNTRY_COLORS,
-} from "../lib/observatory";
+import { COUNTERS, normalizeSelection } from "../lib/observatory";
 import type {
   Dataset,
   MetricSelection,
   MetricsResponse,
 } from "../lib/metrics-types";
+import {
+  createHeatScale,
+  DEBT_MEASURES,
+  mapValue,
+  parseMapMeasure,
+  type MapMeasure,
+} from "../lib/heat-map";
 import { validateDataset } from "../lib/providers";
 import MetricCounter from "./MetricCounter";
 import GeographicMap from "./GeographicMap";
@@ -37,6 +40,7 @@ export default function Dashboard({
   const [selection, setSelection] = useState<MetricSelection>(
     COUNTERS[0].selection,
   );
+  const [mapMeasure, setMapMeasure] = useState<MapMeasure>("total");
   const [country, setCountry] = useState<string | null>(null);
   const [now, setNow] = useState(referenceTime);
   const [ready, setReady] = useState(false);
@@ -50,6 +54,12 @@ export default function Dashboard({
       );
       setSelection(normalizeSelection(parsed.selection));
       setCountry(parsed.country);
+      setMapMeasure(
+        parseMapMeasure(
+          new URLSearchParams(location.search).get("mapMeasure"),
+          parsed.selection.metric,
+        ),
+      );
       setNow(Date.now());
       setReady(true);
     };
@@ -68,10 +78,13 @@ export default function Dashboard({
     }))
       url.searchParams.set(key, value);
     url.searchParams.delete("compare");
+    if (selection.metric === "debt" && mapMeasure !== "total")
+      url.searchParams.set("mapMeasure", mapMeasure);
+    else url.searchParams.delete("mapMeasure");
     if (country) url.searchParams.set("country", country);
     else url.searchParams.delete("country");
     history.replaceState(null, "", url);
-  }, [selection, country, ready]);
+  }, [selection, country, mapMeasure, ready]);
   useEffect(() => {
     const controller = new AbortController();
     let active = false;
@@ -160,9 +173,38 @@ export default function Dashboard({
     [data, values],
   );
   const leaders = ranked.slice(0, 7);
+  const mapSelection = useMemo(
+    () =>
+      ({
+        ...selection,
+        measure: selection.metric === "debt" ? mapMeasure : "total",
+      }) as MetricSelection,
+    [selection, mapMeasure],
+  );
+  const mapValues = useMemo(
+    () =>
+      new Map(
+        data.countries.map((c) => [
+          c.iso2,
+          mapValue(models.get(c.iso2), mapSelection, now),
+        ]),
+      ),
+    [data, models, mapSelection, now],
+  );
+  const heatScale = useMemo(
+    () =>
+      createHeatScale(mapValues.values(), mapSelection.measure === "debtRatio"),
+    [mapValues, mapSelection],
+  );
   const colors = useMemo(
-    () => new Map(leaders.map((c, i) => [c.iso2, COUNTRY_COLORS[i]])),
-    [leaders],
+    () =>
+      new Map(
+        [...mapValues].flatMap(([iso, value]) => {
+          const color = heatScale.color(value);
+          return color ? [[iso, color] as [string, string]] : [];
+        }),
+      ),
+    [mapValues, heatScale],
   );
   const model = models.get(selected?.iso2 ?? data.world.iso2) ?? null;
   const onSelect = useCallback((iso: string | null) => setCountry(iso), []);
@@ -203,7 +245,7 @@ export default function Dashboard({
           <div className={`hero-counter ${currency ? "is-currency" : ""}`}>
             {currency && model ? "$" : ""}
             <MetricCounter
-              key={`${country}-${currentCard.id}-${periodKey}`}
+              key={`${country}-${currentCard.id}-${selection.metric === "debt" ? "stock" : periodKey}`}
               model={model}
               selection={selection}
             />
@@ -233,7 +275,7 @@ export default function Dashboard({
                     : selection.metric === "co2"
                       ? "tonnes"
                       : "people"}{" "}
-                  / second
+                  / second{selection.metric === "debt" ? " · model trend" : ""}
                 </span>
               </>
             ) : (
@@ -248,16 +290,16 @@ export default function Dashboard({
             <h2>
               TOP COUNTRIES <span>{currentCard.period}</span>
             </h2>
-            {leaders.map((c, i) => (
+            {leaders.map((c) => (
               <button
                 key={c.iso2}
                 onClick={() => setCountry(c.iso2)}
                 aria-pressed={country === c.iso2}
               >
-                <i style={{ background: COUNTRY_COLORS[i] }} />
+                <i style={{ background: "var(--ink-muted)" }} />
                 <span
                   className="leader-code"
-                  style={{ color: COUNTRY_COLORS[i] }}
+                  style={{ color: "var(--ink-muted)" }}
                 >
                   {c.iso2}
                 </span>
@@ -301,24 +343,89 @@ export default function Dashboard({
           <div className="map-topline">
             <span>
               {currentCard.label.toUpperCase()}{" "}
-              <b> / {currentCard.period.toUpperCase()}</b>
+              <b>
+                {" "}
+                /{" "}
+                {mapSelection.measure === "debtRatio"
+                  ? "SOURCE YEAR"
+                  : currentCard.period.toUpperCase()}
+              </b>
             </span>
-            <span>{ranked.length} countries with estimates</span>
+            <span>{heatScale.count} countries with data</span>
           </div>
+          {selection.metric === "debt" && (
+            <div
+              className="map-measures"
+              role="group"
+              aria-label="Debt map measure"
+            >
+              {DEBT_MEASURES.map((measure) => (
+                <button
+                  key={measure.id}
+                  aria-pressed={mapMeasure === measure.id}
+                  onClick={() => setMapMeasure(measure.id)}
+                >
+                  {measure.label}
+                </button>
+              ))}
+            </div>
+          )}
           <GeographicMap
             countries={data.countries}
             models={models}
-            values={values}
-            selection={selection}
+            values={mapValues}
+            selection={mapSelection}
             selectedIso={country}
             colors={colors}
             onSelect={onSelect}
-            now={now}
+            source={
+              selection.metric === "debt" || selection.metric === "gdp"
+                ? data.sources.imf
+                : data.sources.worldbank
+            }
           />
+          <div
+            className="heat-legend"
+            aria-label={`${heatScale.kind} heat scale`}
+          >
+            <div className="legend-heading">
+              <span>
+                {mapSelection.measure === "debtRatio"
+                  ? "% of GDP"
+                  : mapSelection.measure === "perCapita"
+                    ? "USD / person"
+                    : currentCard.unit}{" "}
+                · {heatScale.kind.toLowerCase()} scale
+              </span>
+              <span>
+                <i className="missing-swatch" />
+                No current data
+              </span>
+            </div>
+            {heatScale.count > 0 ? (
+              <>
+                <div
+                  className="heat-gradient"
+                  style={{
+                    background: `linear-gradient(to right, ${[0, 1, 2, 3, 4].map((i) => heatScale.color(heatScale.ticks.length === 1 ? heatScale.min : heatScale.ticks[i])).join(", ")})`,
+                  }}
+                />
+                <div
+                  className={`legend-ticks ${heatScale.ticks.length === 1 ? "single" : ""}`}
+                >
+                  {heatScale.ticks.map((value, i) => (
+                    <span key={i}>{formatMeasure(value, mapSelection)}</span>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p>No current data for this measure</p>
+            )}
+          </div>
           <p className="map-caption">
             Drag to explore · Scroll to zoom · Click a country
             <span>
-              Colors identify top countries. Dots are geography, not events.
+              Country color shows the selected measure, not a risk rating.
             </span>
           </p>
         </div>
@@ -341,6 +448,7 @@ export default function Dashboard({
                 key={card.id}
                 onClick={() => {
                   setSelection(card.selection);
+                  setMapMeasure("total");
                   setCountry(null);
                   setQuery("");
                 }}
@@ -354,7 +462,7 @@ export default function Dashboard({
                     ? "$"
                     : ""}
                   <MetricCounter
-                    key={`${card.id}-${card.selection.period === "today" ? modelDay : new Date(now).getUTCFullYear()}`}
+                    key={`${card.id}-${card.id === "debt" ? "stock" : card.selection.period === "today" ? modelDay : new Date(now).getUTCFullYear()}`}
                     model={m}
                     selection={card.selection}
                   />
@@ -408,8 +516,11 @@ export default function Dashboard({
             <p>
               GDP is output generated this year. Government debt interpolates
               consecutive year-end gross debt balances, including currency
-              valuation effects, and may decrease. CO₂ is measured in tonnes and
-              excludes land-use change and forestry.
+              valuation effects, and may decrease. Debt clocks use continuous
+              interpolation; source revisions reconcile through a bounded rate
+              adjustment and can take time to converge. These are modelled
+              estimates, not official real-time debt measurements. CO₂ is
+              measured in tonnes and excludes land-use change and forestry.
             </p>
           </div>
           <div>
@@ -420,10 +531,11 @@ export default function Dashboard({
               aggregates and may differ from country sums.
             </p>
             <p>
-              Natural Earth boundaries are illustrative. Square dots describe
-              land, not locations of births, deaths, or emissions. Country
-              colors match the top-country list. Small islands use locator
-              rings.
+              Natural Earth boundaries are illustrative. Country fills show the
+              selected measure on a logarithmic scale, or a linear scale for
+              debt / GDP. Gray means no current data. Small islands use locator
+              rings. Debt per person uses the population basis year shown in its
+              tooltip; debt / GDP is the published source-year ratio.
             </p>
             <p>
               <a href="https://www.worldbank.org/en/about/legal/terms-of-use-for-datasets">

@@ -4,20 +4,15 @@ import { geoEqualEarth, geoPath, geoContains } from "d3-geo";
 import geography from "../lib/geography";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { subscribeFrame } from "../lib/clock";
-import {
-  formatMeasure,
-  measureUnit,
-  perSecondFor,
-  counterLabel,
-  valueAt,
-} from "../lib/metrics";
+import { formatMeasure, measureUnit } from "../lib/metrics";
 import type {
+  DataSource,
   Entity,
   MetricModel,
   MetricSelection,
 } from "../lib/metrics-types";
 import { readCssColor, subscribeThemeChange } from "../lib/theme";
-import { sampleDots } from "../lib/map-dots";
+import { mapLabel, mixColor } from "../lib/heat-map";
 
 const W = 1100,
   H = 590;
@@ -32,8 +27,15 @@ const projection = geoEqualEarth().fitExtent(
   },
 );
 const shapes = geography.features.filter((f) => f.properties.iso !== "AQ");
-const byIso = new Map(
-  shapes.map((f) => [f.properties.iso, geoPath(projection).area(f)]),
+const byIso = new Map<string, number>();
+for (const feature of shapes)
+  byIso.set(
+    feature.properties.iso,
+    (byIso.get(feature.properties.iso) ?? 0) +
+      geoPath(projection).area(feature),
+  );
+const names = new Map(
+  shapes.map((feature) => [feature.properties.iso, feature.properties.name]),
 );
 interface Camera {
   x: number;
@@ -57,11 +59,18 @@ interface Props {
   selectedIso: string | null;
   colors: Map<string, string>;
   onSelect: (iso: string | null) => void;
-  now: number;
+  source: DataSource;
 }
 export default function GeographicMap(props: Props) {
-  const { countries, values, models, selection, selectedIso, onSelect, now } =
-    props;
+  const {
+    countries,
+    values,
+    models,
+    selection,
+    selectedIso,
+    onSelect,
+    source,
+  } = props;
   const container = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const cameraRef = useRef<Camera>(HOME);
@@ -103,6 +112,23 @@ export default function GeographicMap(props: Props) {
     state.current = { ...props, hoverIso: hover?.iso ?? null };
     dirty.current = true;
   }, [props, hover]);
+  useLayoutEffect(() => {
+    const viewport = container.current;
+    const tooltip = viewport?.querySelector<HTMLElement>(".map-tooltip");
+    if (!viewport || !tooltip || !hover) return;
+    const placeTooltip = () => {
+      const width = viewport.clientWidth,
+        height = viewport.clientHeight;
+      const x = (hover.x / W) * width,
+        y = (hover.y / H) * height;
+      tooltip.style.left = `${Math.max(6, Math.min(width - tooltip.offsetWidth - 6, x - tooltip.offsetWidth / 2))}px`;
+      tooltip.style.top = `${Math.max(6, Math.min(height - tooltip.offsetHeight - 6, y - tooltip.offsetHeight - 12))}px`;
+    };
+    placeTooltip();
+    const observer = new ResizeObserver(placeTooltip);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [hover, selection, source]);
   const updateCamera = (next: Camera) => {
     const clamped = clampCamera(next);
     cameraRef.current = clamped;
@@ -176,57 +202,99 @@ export default function GeographicMap(props: Props) {
     if (!element || !target) return;
     const ctx = target.getContext("2d");
     if (!ctx) return;
-    const base = document.createElement("canvas");
-    const b = base.getContext("2d")!;
     let scale = 1,
       dpr = 1;
-    let accent = readCssColor("--accent", element);
-    let low = readCssColor("--map-low");
     let missing = readCssColor("--map-missing");
-
+    let border = readCssColor("--map-border");
     let ink = readCssColor("--ink");
-    const resize = () => {
-      dpr = Math.min(2, window.devicePixelRatio || 1);
-      scale = element.clientWidth / W;
-      target.width = base.width = Math.round(element.clientWidth * dpr);
-      target.height = base.height = Math.round(
-        ((element.clientWidth * H) / W) * dpr,
-      );
+    let background = readCssColor("--background");
+    let reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const motionChanged = () => {
+      reduced = motion.matches;
       dirty.current = true;
     };
-    const dotCache = new Map<number, Map<string, [number, number][]>>();
+    motion.addEventListener("change", motionChanged);
     const geometryPath = geoPath(projection);
-    const paths = new Map(
-      shapes.map((feature) => [
-        feature.properties.iso,
-        new Path2D(geometryPath(feature) ?? ""),
-      ]),
-    );
-    const sampleContext = document.createElement("canvas").getContext("2d")!;
-    const dotsFor = (level: number) => {
-      let cached = dotCache.get(level);
-      if (!cached) {
-        cached = new Map();
-        const spacing = 5 / level;
-        for (const feature of shapes) {
-          const path = paths.get(feature.properties.iso)!;
-          cached.set(
-            feature.properties.iso,
-            sampleDots(geometryPath.bounds(feature), spacing, (x, y) =>
-              sampleContext.isPointInPath(path, x, y),
-            ),
-          );
-        }
-        dotCache.set(level, cached);
-      }
-      return cached;
+    // Feature-indexed paths preserve islands and disputed geometries sharing an ISO.
+    const paths = shapes.map((feature) => ({
+      feature,
+      path: new Path2D(geometryPath(feature) ?? ""),
+    }));
+    const transitions = new Map<
+      string,
+      { from: string; to: string; at: number }
+    >();
+    const highlights = new Map<
+      string,
+      { from: number; to: number; at: number }
+    >();
+    const resize = () => {
+      dpr = window.devicePixelRatio || 1;
+      scale = element.clientWidth / W;
+      target.width = Math.round(element.clientWidth * dpr);
+      target.height = Math.round(((element.clientWidth * H) / W) * dpr);
+      dirty.current = true;
     };
-    const drawBase = () => {
-      const current = state.current;
-      const cam = cameraRef.current;
-      b.setTransform(1, 0, 0, 1, 0, 0);
-      b.clearRect(0, 0, base.width, base.height);
-      b.setTransform(
+    let animating = false;
+    const draw = (now: number) => {
+      if ((!dirty.current && !animating) || !target.width || !target.height)
+        return;
+      const current = state.current,
+        cam = cameraRef.current;
+      animating = false;
+      const colors = new Map<string, string>();
+      const emphasis = new Map<string, number>();
+      for (const iso of new Set([
+        ...byIso.keys(),
+        ...locators.map((l) => l.iso),
+      ])) {
+        const next = current.colors.get(iso) ?? missing;
+        let transition = transitions.get(iso);
+        if (!transition) transition = { from: next, to: next, at: now };
+        const progress = reduced
+          ? 1
+          : Math.min(1, Math.max(0, (now - transition.at) / 240));
+        let color = mixColor(transition.from, transition.to, progress);
+        if (transition.to !== next)
+          transition = { from: color, to: next, at: now };
+        if (reduced) color = next;
+        transitions.set(iso, transition);
+        colors.set(iso, color);
+        if (
+          !reduced &&
+          now - transition.at < 240 &&
+          transition.from !== transition.to
+        )
+          animating = true;
+        const active =
+          iso === current.selectedIso || iso === current.hoverIso ? 1 : 0;
+        let highlight = highlights.get(iso) ?? {
+          from: active,
+          to: active,
+          at: now,
+        };
+        let alpha =
+          highlight.from +
+          (highlight.to - highlight.from) *
+            (reduced
+              ? 1
+              : Math.min(1, Math.max(0, (now - highlight.at) / 140)));
+        if (active !== highlight.to)
+          highlight = { from: alpha, to: active, at: now };
+        if (reduced) alpha = active;
+        highlights.set(iso, highlight);
+        emphasis.set(iso, alpha);
+        if (
+          !reduced &&
+          now - highlight.at < 140 &&
+          highlight.from !== highlight.to
+        )
+          animating = true;
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, target.width, target.height);
+      ctx.setTransform(
         scale * dpr * cam.k,
         0,
         0,
@@ -234,97 +302,75 @@ export default function GeographicMap(props: Props) {
         cam.x * scale * dpr,
         cam.y * scale * dpr,
       );
-      const level = cam.k < 2 ? 1 : cam.k < 4 ? 2 : 4;
-      const dots = dotsFor(level);
-      const path = geoPath(projection, b);
-      for (const feature of shapes) {
+      ctx.lineJoin = "round";
+      for (const { feature, path } of paths) {
+        ctx.fillStyle = colors.get(feature.properties.iso)!;
+        ctx.fill(path);
+        ctx.strokeStyle = border;
+        ctx.lineWidth = 0.55 / cam.k;
+        ctx.stroke(path);
+      }
+      // Draw emphasis after every fill so neighboring countries cannot cover borders.
+      for (const { feature, path } of paths) {
         const iso = feature.properties.iso;
-        const highlighted =
-          iso === current.selectedIso || iso === current.hoverIso;
-        const available = current.values.get(iso) != null;
-        b.globalAlpha = current.selectedIso && !highlighted ? 0.6 : 1;
-        b.fillStyle = highlighted
-          ? ink
-          : (current.colors.get(iso) ?? (available ? low : missing));
-        const size = 2.5 / level;
-        for (const [x, y] of dots.get(iso) ?? [])
-          b.fillRect(x - size / 2, y - size / 2, size, size);
-        if (highlighted || cam.k >= 2.5) {
-          b.beginPath();
-          path(feature);
-          b.strokeStyle = highlighted ? ink : low;
-          b.lineWidth = (highlighted ? 1.2 : 0.35) / cam.k;
-          b.stroke();
+        const alpha = emphasis.get(iso) ?? 0;
+        if (alpha > 0) {
+          ctx.globalAlpha = alpha;
+          ctx.strokeStyle = ink;
+          ctx.lineWidth = 1.5 / cam.k;
+          ctx.stroke(path);
+          ctx.globalAlpha = 1;
         }
         if (
-          (highlighted || cam.k >= 2.5) &&
-          path.area(feature) * cam.k * cam.k > 2500
+          (alpha > 0.5 || cam.k >= 3) &&
+          geometryPath.area(feature) * cam.k * cam.k > 3000
         ) {
           const point = projection(feature.properties.label);
           if (point) {
-            b.font = `500 ${11 / cam.k}px monospace`;
-            b.textAlign = "center";
-            b.lineWidth = 3 / cam.k;
-            b.strokeStyle = readCssColor("--background");
-            b.strokeText(feature.properties.name, point[0], point[1]);
-            b.fillStyle = ink;
-            b.fillText(feature.properties.name, point[0], point[1]);
-            b.textAlign = "start";
+            ctx.font = `500 ${11 / cam.k}px monospace`;
+            ctx.textAlign = "center";
+            ctx.lineWidth = 3 / cam.k;
+            ctx.strokeStyle = background;
+            ctx.strokeText(feature.properties.name, point[0], point[1]);
+            ctx.fillStyle = ink;
+            ctx.fillText(feature.properties.name, point[0], point[1]);
           }
         }
       }
-      b.globalAlpha = 1;
       for (const locator of locators) {
-        const selected =
-          locator.iso === current.selectedIso ||
-          locator.iso === current.hoverIso;
-        b.strokeStyle = selected
-          ? ink
-          : (current.colors.get(locator.iso) ?? low);
-        b.lineWidth = (selected ? 1.8 : 1) / cam.k;
-        b.beginPath();
-        b.arc(
+        const alpha = emphasis.get(locator.iso) ?? 0;
+        ctx.fillStyle = colors.get(locator.iso) ?? missing;
+        ctx.strokeStyle = alpha > 0 ? ink : border;
+        ctx.lineWidth = (alpha > 0 ? 1.5 : 0.7) / cam.k;
+        ctx.beginPath();
+        ctx.arc(
           locator.point[0],
           locator.point[1],
-          (selected ? 5 : 2.5) / Math.sqrt(cam.k),
+          (alpha > 0 ? 4 : 2.5) / Math.sqrt(cam.k),
           0,
           Math.PI * 2,
         );
-        b.stroke();
+        ctx.fill();
+        ctx.stroke();
       }
       dirty.current = false;
-    };
-    const draw = () => {
-      // Accent can change with a metric switch without a theme change.
-      const nextAccent = dirty.current
-        ? readCssColor("--accent", element)
-        : accent;
-      if (accent !== nextAccent) {
-        accent = nextAccent;
-        dirty.current = true;
-      }
-      if (!dirty.current || !base.width || !base.height) return;
-      drawBase();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, target.width, target.height);
-      ctx.drawImage(base, 0, 0);
     };
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(element);
     const stopTheme = subscribeThemeChange(() => {
-      accent = readCssColor("--accent", element);
-      low = readCssColor("--map-low");
       missing = readCssColor("--map-missing");
-
+      border = readCssColor("--map-border");
       ink = readCssColor("--ink");
+      background = readCssColor("--background");
       dirty.current = true;
     });
-    const stopFrame = subscribeFrame(draw);
+    const stopFrame = subscribeFrame(draw, false);
     return () => {
       observer.disconnect();
       stopTheme();
       stopFrame();
+      motion.removeEventListener("change", motionChanged);
     };
   }, [locators]);
   const nearest = (point: { x: number; y: number }) => {
@@ -335,9 +381,7 @@ export default function GeographicMap(props: Props) {
       iso: string | null = null;
     const geographic = projection.invert?.([x, y]);
     if (geographic) {
-      const feature = shapes.find(
-        (f) => entities.has(f.properties.iso) && geoContains(f, geographic),
-      );
+      const feature = shapes.find((f) => geoContains(f, geographic));
       if (feature) return feature.properties.iso;
     }
     for (const locator of locators) {
@@ -349,7 +393,12 @@ export default function GeographicMap(props: Props) {
     }
     return iso;
   };
-  const hovered = hover ? entities.get(hover.iso) : null;
+  const hovered = hover
+    ? (entities.get(hover.iso) ?? {
+        name: names.get(hover.iso) ?? hover.iso,
+        iso2: hover.iso,
+      })
+    : null;
   const hoveredModel = hover ? models.get(hover.iso) : null;
   return (
     <figure className="map-figure">
@@ -463,7 +512,10 @@ export default function GeographicMap(props: Props) {
             !gesture.current.moved
           ) {
             const iso = nearest(point);
-            onSelect(iso === selectedIso ? null : iso);
+            onSelect(
+              iso === selectedIso || !iso || !entities.has(iso) ? null : iso,
+            );
+            setHover(iso ? { iso, ...point } : null);
           }
           pointers.current.delete(event.pointerId);
           if (event.currentTarget.hasPointerCapture(event.pointerId))
@@ -478,8 +530,9 @@ export default function GeographicMap(props: Props) {
           gesture.current = null;
           setDragging(false);
         }}
-        onPointerLeave={() => {
-          if (pointers.current.size === 0) setHover(null);
+        onPointerLeave={(event) => {
+          if (event.pointerType !== "touch" && pointers.current.size === 0)
+            setHover(null);
         }}
       >
         <canvas ref={canvas} aria-hidden="true" />
@@ -495,36 +548,40 @@ export default function GeographicMap(props: Props) {
         {hover && hovered && (
           <div
             className="map-tooltip"
-            role="status"
+            role="tooltip"
             style={{
-              left: `clamp(120px, ${(hover.x / W) * 100}%, calc(100% - 120px))`,
-              top: `clamp(8px, calc(${(hover.y / H) * 100}% - 110px), calc(100% - 118px))`,
+              left: `${Math.max(0, Math.min(100, (hover.x / W) * 100))}%`,
+              top: `${(hover.y / H) * 100}%`,
             }}
           >
             <div>
               <span>{hovered.iso2}</span>
               <strong>{hovered.name}</strong>
             </div>
-            <p>{counterLabel(selection)}</p>
+            <p>{mapLabel(selection)}</p>
             <b>
-              {formatMeasure(
-                values.get(hover.iso) ??
-                  (hoveredModel?.historical
-                    ? valueAt(hoveredModel, selection, now)
-                    : null),
-                selection,
-              )}{" "}
-              <small>{measureUnit(selection)}</small>
+              {formatMeasure(values.get(hover.iso) ?? null, selection)}{" "}
+              <small>
+                {selection.measure === "debtRatio"
+                  ? ""
+                  : measureUnit(selection)}
+              </small>
             </b>
             <p>
               {hoveredModel
-                ? `${hoveredModel.year} source${hoveredModel.forecast ? " · forecast" : hoveredModel.historical ? " · historical" : ""}`
+                ? `${hoveredModel.year} observation${hoveredModel.forecast ? " · forecast" : ""}${hoveredModel.historical ? " · historical, no current estimate" : selection.measure === "debtRatio" ? " · source ratio" : " · modelled estimate"}`
                 : "Data unavailable"}
-              {hoveredModel && !hoveredModel.historical
-                ? ` · ${perSecondFor(hoveredModel, now).toFixed(2)}/s estimated`
-                : ""}
             </p>
-            <small>Click to explore</small>
+            {hoveredModel && <p>Release: {source.updatedAt.split(" ")[0]}</p>}
+            {selection.measure === "perCapita" &&
+              hoveredModel?.populationYear && (
+                <p>Population basis: {hoveredModel.populationYear}</p>
+              )}
+            <small>
+              {entities.has(hover.iso)
+                ? "Select country to explore"
+                : "No statistical record"}
+            </small>
           </div>
         )}
       </div>

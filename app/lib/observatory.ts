@@ -1,13 +1,4 @@
 import type { MetricSelection } from "./metrics-types.ts";
-export const COUNTRY_COLORS = [
-  "#508bff",
-  "#ffd43b",
-  "#ff625e",
-  "#40c995",
-  "#b48aff",
-  "#ff9f43",
-  "#ec70b5",
-];
 const selection = (
   metric: MetricSelection["metric"],
   populationView: MetricSelection["populationView"] = "population",

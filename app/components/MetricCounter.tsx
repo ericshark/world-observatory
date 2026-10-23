@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { subscribeFrame } from "../lib/clock";
+import { frameNow, subscribeFrame } from "../lib/clock";
 import {
   blendRevision,
   formatNumber,
   valueAt,
   perSecondFor,
 } from "../lib/metrics";
+import { DebtClock, formatDebt } from "../lib/debt-clock";
 import { digitPosition } from "../lib/observatory";
 import type { MetricModel, MetricSelection } from "../lib/metrics-types";
 
@@ -24,6 +25,7 @@ export default function MetricCounter({
 }) {
   const node = useRef<HTMLSpanElement>(null);
   const last = useRef<number | null>(null);
+  const debt = useRef<DebtClock | null>(null);
   useEffect(() => {
     const element = node.current;
     if (!element) return;
@@ -31,9 +33,49 @@ export default function MetricCounter({
       element.textContent = "—";
       element.setAttribute("aria-label", "Unavailable");
       last.current = null;
+      debt.current = null;
       return;
     }
-    const started = Date.now();
+    const started = frameNow();
+    if (selection.metric === "debt" && !compact) {
+      const previous = debt.current?.value(started);
+      const timeline = new DebtClock(model, started, previous);
+      debt.current = timeline;
+      let slots: HTMLElement[] = [];
+      let oldText = "";
+      let labelAt = -Infinity;
+      const renderDebt = (now: number) => {
+        const text = formatDebt(timeline.value(now));
+        if (text.length !== slots.length) {
+          slots = [...text].map((character) => {
+            const span = document.createElement("span");
+            span.className = /\d/.test(character)
+              ? "debt-digit"
+              : "debt-separator";
+            span.setAttribute("aria-hidden", "true");
+            span.textContent = character;
+            return span;
+          });
+          element.replaceChildren(...slots);
+        } else {
+          for (let i = 0; i < text.length; i++)
+            if (text[i] !== oldText[i]) slots[i].textContent = text[i];
+        }
+        oldText = text;
+        if (now - labelAt >= 1000) {
+          const status = model.historical
+            ? `Historical observation, ${model.year}`
+            : timeline.reconciling(now)
+              ? "Modelled estimate, reconciling source revision"
+              : "Modelled estimate";
+          element.setAttribute("aria-label", `${text}. ${status}`);
+          element.title = status;
+          labelAt = now;
+        }
+      };
+      renderDebt(started);
+      return subscribeFrame(renderDebt);
+    }
     const offset =
       last.current === null
         ? 0
