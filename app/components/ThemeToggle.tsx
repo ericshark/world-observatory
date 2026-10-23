@@ -4,13 +4,13 @@ import { useSyncExternalStore } from "react";
 import { THEME_STORAGE_KEY } from "../lib/theme";
 
 type ThemeChoice = "system" | "light" | "dark";
-const order: ThemeChoice[] = ["system", "light", "dark"];
+const order: ThemeChoice[] = ["dark", "light"];
 
 const listeners = new Set<() => void>();
 
 function readChoice(): ThemeChoice {
   const value = document.documentElement.dataset.theme;
-  return value === "light" || value === "dark" ? value : "system";
+  return value === "light" || value === "dark" ? value : "dark";
 }
 
 function writeChoice(choice: ThemeChoice) {
@@ -41,7 +41,7 @@ export default function ThemeToggle() {
   const choice = useSyncExternalStore(
     subscribe,
     readChoice,
-    () => "system" as const,
+    () => "dark" as const,
   );
   const next = order[(order.indexOf(choice) + 1) % order.length];
 

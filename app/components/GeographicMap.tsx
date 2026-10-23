@@ -4,14 +4,20 @@ import { geoEqualEarth, geoPath, geoContains } from "d3-geo";
 import geography from "../lib/geography";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { subscribeFrame } from "../lib/clock";
-import { formatMeasure, measureUnit, perSecondFor } from "../lib/metrics";
+import {
+  formatMeasure,
+  measureUnit,
+  perSecondFor,
+  counterLabel,
+  valueAt,
+} from "../lib/metrics";
 import type {
   Entity,
   MetricModel,
   MetricSelection,
 } from "../lib/metrics-types";
 import { readCssColor, subscribeThemeChange } from "../lib/theme";
-import { COMPARE_COLORS } from "./HistoryChart";
+import { sampleDots } from "../lib/map-dots";
 
 const W = 1100,
   H = 590;
@@ -20,10 +26,15 @@ const projection = geoEqualEarth().fitExtent(
     [18, 18],
     [W - 18, H - 18],
   ],
-  { type: "Sphere" },
+  {
+    ...geography,
+    features: geography.features.filter((f) => f.properties.iso !== "AQ"),
+  },
 );
-const shapes = geography.features;
-const byIso = new Map(shapes.map((f) => [f.properties.iso, true]));
+const shapes = geography.features.filter((f) => f.properties.iso !== "AQ");
+const byIso = new Map(
+  shapes.map((f) => [f.properties.iso, geoPath(projection).area(f)]),
+);
 interface Camera {
   x: number;
   y: number;
@@ -38,34 +49,13 @@ function clampCamera(camera: Camera): Camera {
     y: Math.min(0, Math.max(H * (1 - k), camera.y)),
   };
 }
-export function heatFraction(
-  value: number,
-  min: number,
-  max: number,
-  logarithmic: boolean,
-) {
-  const transform = (v: number) =>
-    logarithmic ? Math.log1p(Math.max(0, v)) : v;
-  const lo = transform(min),
-    hi = transform(max);
-  return hi === lo
-    ? 0.65
-    : Math.max(0, Math.min(1, (transform(value) - lo) / (hi - lo)));
-}
-function mixColor(low: string, high: string, t: number) {
-  const rgb = (hex: string) =>
-    [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-  const a = rgb(low),
-    b = rgb(high);
-  return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(",")})`;
-}
 interface Props {
   countries: Entity[];
   values: Map<string, number | null>;
   models: Map<string, MetricModel | null>;
   selection: MetricSelection;
   selectedIso: string | null;
-  compare: string[];
+  colors: Map<string, string>;
   onSelect: (iso: string | null) => void;
   now: number;
 }
@@ -97,7 +87,7 @@ export default function GeographicMap(props: Props) {
   const locators = useMemo(
     () =>
       countries
-        .filter((c) => !byIso.has(c.iso2) && c.coordinates)
+        .filter((c) => (byIso.get(c.iso2) ?? 0) < 20 && c.coordinates)
         .map((c) => ({ iso: c.iso2, point: projection(c.coordinates!)! }))
         .filter(
           (c) =>
@@ -109,12 +99,6 @@ export default function GeographicMap(props: Props) {
         ),
     [countries],
   );
-  const logarithmic = selection.measure === "total";
-  const validValues = [...values.values()].filter(
-    (v): v is number => v !== null,
-  );
-  const min = validValues.length ? Math.min(...validValues) : 0;
-  const max = validValues.length ? Math.max(...validValues) : 0;
   useLayoutEffect(() => {
     state.current = { ...props, hoverIso: hover?.iso ?? null };
     dirty.current = true;
@@ -154,7 +138,24 @@ export default function GeographicMap(props: Props) {
       const current = cameraRef.current;
       const k = Math.max(
         1,
-        Math.min(8, current.k * Math.exp(-event.deltaY * 0.0015)),
+        Math.min(
+          8,
+          current.k *
+            Math.exp(
+              -Math.max(
+                -200,
+                Math.min(
+                  200,
+                  event.deltaY *
+                    (event.deltaMode === 1
+                      ? 16
+                      : event.deltaMode === 2
+                        ? bounds.height
+                        : 1),
+                ),
+              ) * 0.003,
+            ),
+        ),
       );
       const next = clampCamera({
         k,
@@ -182,7 +183,7 @@ export default function GeographicMap(props: Props) {
     let accent = readCssColor("--accent", element);
     let low = readCssColor("--map-low");
     let missing = readCssColor("--map-missing");
-    let grid = readCssColor("--map-grid");
+
     let ink = readCssColor("--ink");
     const resize = () => {
       dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -193,15 +194,36 @@ export default function GeographicMap(props: Props) {
       );
       dirty.current = true;
     };
+    const dotCache = new Map<number, Map<string, [number, number][]>>();
+    const geometryPath = geoPath(projection);
+    const paths = new Map(
+      shapes.map((feature) => [
+        feature.properties.iso,
+        new Path2D(geometryPath(feature) ?? ""),
+      ]),
+    );
+    const sampleContext = document.createElement("canvas").getContext("2d")!;
+    const dotsFor = (level: number) => {
+      let cached = dotCache.get(level);
+      if (!cached) {
+        cached = new Map();
+        const spacing = 5 / level;
+        for (const feature of shapes) {
+          const path = paths.get(feature.properties.iso)!;
+          cached.set(
+            feature.properties.iso,
+            sampleDots(geometryPath.bounds(feature), spacing, (x, y) =>
+              sampleContext.isPointInPath(path, x, y),
+            ),
+          );
+        }
+        dotCache.set(level, cached);
+      }
+      return cached;
+    };
     const drawBase = () => {
       const current = state.current;
       const cam = cameraRef.current;
-      const valid = [...current.values.values()].filter(
-        (v): v is number => v !== null,
-      );
-      const min = valid.length ? Math.min(...valid) : 0,
-        max = valid.length ? Math.max(...valid) : 0;
-      const log = current.selection.measure === "total";
       b.setTransform(1, 0, 0, 1, 0, 0);
       b.clearRect(0, 0, base.width, base.height);
       b.setTransform(
@@ -212,68 +234,40 @@ export default function GeographicMap(props: Props) {
         cam.x * scale * dpr,
         cam.y * scale * dpr,
       );
-      b.strokeStyle = grid;
-      b.lineWidth = 0.5 / cam.k;
-      for (let lon = -180; lon <= 180; lon += 30) {
-        const top = projection([lon, 80]),
-          bottom = projection([lon, -60]);
-        if (top && bottom) {
-          b.beginPath();
-          b.moveTo(...top);
-          b.lineTo(...bottom);
-          b.stroke();
-        }
-      }
-      for (let lat = -60; lat <= 80; lat += 20) {
-        const left = projection([-180, lat]),
-          right = projection([180, lat]);
-        if (left && right) {
-          b.beginPath();
-          b.moveTo(...left);
-          b.lineTo(...right);
-          b.stroke();
-        }
-      }
-      const colors = new Map<string, string>();
-      for (const country of current.countries) {
-        const value = current.values.get(country.iso2);
-        colors.set(
-          country.iso2,
-          value === null || value === undefined
-            ? missing
-            : mixColor(
-                low,
-                accent,
-                0.15 + heatFraction(value, min, max, log) * 0.85,
-              ),
-        );
-      }
+      const level = cam.k < 2 ? 1 : cam.k < 4 ? 2 : 4;
+      const dots = dotsFor(level);
       const path = geoPath(projection, b);
       for (const feature of shapes) {
         const iso = feature.properties.iso;
-        const pin = current.compare.indexOf(iso);
         const highlighted =
           iso === current.selectedIso || iso === current.hoverIso;
-        b.globalAlpha =
-          current.selectedIso && !highlighted && pin < 0 ? 0.55 : 1;
-        b.beginPath();
-        path(feature);
-        b.fillStyle =
-          pin >= 0
-            ? COMPARE_COLORS[pin]
-            : highlighted
-              ? accent
-              : (colors.get(iso) ?? missing);
-        b.fill();
-        b.strokeStyle = highlighted ? ink : grid;
-        b.lineWidth = (highlighted ? 1.6 : 0.65) / cam.k;
-        b.stroke();
-        if (cam.k >= 2.5 && path.area(feature) * cam.k * cam.k > 2500) {
+        const available = current.values.get(iso) != null;
+        b.globalAlpha = current.selectedIso && !highlighted ? 0.6 : 1;
+        b.fillStyle = highlighted
+          ? ink
+          : (current.colors.get(iso) ?? (available ? low : missing));
+        const size = 2.5 / level;
+        for (const [x, y] of dots.get(iso) ?? [])
+          b.fillRect(x - size / 2, y - size / 2, size, size);
+        if (highlighted || cam.k >= 2.5) {
+          b.beginPath();
+          path(feature);
+          b.strokeStyle = highlighted ? ink : low;
+          b.lineWidth = (highlighted ? 1.2 : 0.35) / cam.k;
+          b.stroke();
+        }
+        if (
+          (highlighted || cam.k >= 2.5) &&
+          path.area(feature) * cam.k * cam.k > 2500
+        ) {
           const point = projection(feature.properties.label);
           if (point) {
-            b.fillStyle = ink;
-            b.font = `500 ${10 / cam.k}px sans-serif`;
+            b.font = `500 ${11 / cam.k}px monospace`;
             b.textAlign = "center";
+            b.lineWidth = 3 / cam.k;
+            b.strokeStyle = readCssColor("--background");
+            b.strokeText(feature.properties.name, point[0], point[1]);
+            b.fillStyle = ink;
             b.fillText(feature.properties.name, point[0], point[1]);
             b.textAlign = "start";
           }
@@ -281,16 +275,12 @@ export default function GeographicMap(props: Props) {
       }
       b.globalAlpha = 1;
       for (const locator of locators) {
-        const pin = current.compare.indexOf(locator.iso);
         const selected =
           locator.iso === current.selectedIso ||
           locator.iso === current.hoverIso;
-        b.strokeStyle =
-          pin >= 0
-            ? COMPARE_COLORS[pin]
-            : selected
-              ? ink
-              : (colors.get(locator.iso) ?? missing);
+        b.strokeStyle = selected
+          ? ink
+          : (current.colors.get(locator.iso) ?? low);
         b.lineWidth = (selected ? 1.8 : 1) / cam.k;
         b.beginPath();
         b.arc(
@@ -301,22 +291,6 @@ export default function GeographicMap(props: Props) {
           Math.PI * 2,
         );
         b.stroke();
-      }
-      // Capitals anchor labels; the heat surface itself is country-level, never city-level data.
-      for (const iso of [
-        ...new Set([current.selectedIso, ...current.compare]),
-      ]) {
-        const entity = current.countries.find((c) => c.iso2 === iso);
-        if (!entity?.coordinates) continue;
-        const p = projection(entity.coordinates);
-        if (!p) continue;
-        const pin = current.compare.indexOf(entity.iso2);
-        b.fillStyle = pin >= 0 ? COMPARE_COLORS[pin] : ink;
-        b.beginPath();
-        b.arc(p[0], p[1], 4 / cam.k, 0, Math.PI * 2);
-        b.fill();
-        b.font = `500 ${11 / cam.k}px monospace`;
-        b.fillText(entity.iso2, p[0] + 8 / cam.k, p[1] + 4 / cam.k);
       }
       dirty.current = false;
     };
@@ -329,7 +303,8 @@ export default function GeographicMap(props: Props) {
         accent = nextAccent;
         dirty.current = true;
       }
-      if (dirty.current) drawBase();
+      if (!dirty.current || !base.width || !base.height) return;
+      drawBase();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, target.width, target.height);
       ctx.drawImage(base, 0, 0);
@@ -341,7 +316,7 @@ export default function GeographicMap(props: Props) {
       accent = readCssColor("--accent", element);
       low = readCssColor("--map-low");
       missing = readCssColor("--map-missing");
-      grid = readCssColor("--map-grid");
+
       ink = readCssColor("--ink");
       dirty.current = true;
     });
@@ -530,8 +505,15 @@ export default function GeographicMap(props: Props) {
               <span>{hovered.iso2}</span>
               <strong>{hovered.name}</strong>
             </div>
+            <p>{counterLabel(selection)}</p>
             <b>
-              {formatMeasure(values.get(hover.iso) ?? null, selection)}{" "}
+              {formatMeasure(
+                values.get(hover.iso) ??
+                  (hoveredModel?.historical
+                    ? valueAt(hoveredModel, selection, now)
+                    : null),
+                selection,
+              )}{" "}
               <small>{measureUnit(selection)}</small>
             </b>
             <p>
@@ -566,19 +548,6 @@ export default function GeographicMap(props: Props) {
         </button>
         <span aria-live="polite">{camera.k.toFixed(1)}×</span>
       </div>
-      <figcaption className="map-legend">
-        <div className="heat-legend">
-          <span>{formatMeasure(min, selection)}</span>
-          <i />
-          <span>{formatMeasure(max, selection)}</span>
-          <small>
-            {logarithmic ? "LOG" : "LINEAR"} · {measureUnit(selection)}
-          </small>
-        </div>
-        <div className="map-legend-note">
-          <span className="missing-key" /> Unavailable
-        </div>
-      </figcaption>
     </figure>
   );
 }

@@ -1,6 +1,6 @@
-# World Pulse
+# World Observatory
 
-An interactive geographic observatory for population, births, deaths, GDP, general-government gross debt, intentional homicides, and CO₂ emissions. Built with Next.js, React, TypeScript, and a canvas map using d3-geo.
+An interactive geographic observatory for population, births, deaths, GDP, general-government gross debt, and CO₂ emissions. Built with Next.js, React, TypeScript, and a canvas map using d3-geo.
 
 ## Run locally
 
@@ -51,11 +51,13 @@ Unknown values stay unavailable. Countries and economies come from the World Ban
 
 ### Interaction and accessibility
 
-Drag or pinch the map, scroll to zoom around the pointer, or use its controls. When the map has keyboard focus, arrows pan, `+`/`-` zoom, `Home` resets, and `Escape` returns to the world. Country search and ranking buttons provide a keyboard alternative to the canvas. Pin at most three countries to compare annual source history, normalized values, and source years. Metric, subview, measure, period, country, and comparison state are shareable through URL parameters.
+The black, monospace dashboard presents six worldwide counters: population, births today, deaths today, GDP this year, government debt, and CO₂ this year. Select a card to explore its country estimates. The hero follows the selected country; the six overview cards always remain worldwide. Country search provides a keyboard alternative to the map. Sources and methodology are available in the collapsed About the data panel.
 
-Map totals use logarithmic shading; rates and per-person measures use linear shading. The solid Equal Earth map uses bundled Natural Earth v5.1.2 1:50m geometry (see `public/maps/README.md`). Polygon containment drives selection. Rings locate countries too small for geometry, and labels appear when zoomed. Country selection and comparison highlights supersede heat colors. Six worldwide overview cards tick independently; selecting a card returns the main map to worldwide for that statistic. Birth/death cards reset at UTC midnight.
+Drag or pinch the dotted map, scroll to zoom around the pointer, or use its controls. With map keyboard focus, arrows pan, `+`/`-` zoom, `Home` resets, and `Escape` returns to the world. Natural Earth v5.1.2 1:50m geometry drives polygon selection and cached square-dot sampling, with more detail at higher zoom. Colors identify the top seven countries, matching the leaderboard; dots represent geography, not events. Missing data remains unavailable. Small islands use locator rings.
 
-All moving counters derive from wall time, with short interpolation for source revisions in either direction. Values do not drift by accumulating frame increments. A shared animation clock pauses in hidden tabs; reduced motion disables pulses and updates numbers once a second. Charts show actual annual observations, gaps, and dashed forecast segments, with accessible data tables.
+Metric and country links remain shareable. Legacy homicide links normalize to population; comparison parameters are discarded and advanced measures normalize to the six counter modes. The underlying source dataset retains all historical series.
+
+Counters use fixed-width rolling digit columns and a shared animation-frame clock. Fast totals may skip intermediate integers; slow totals step only when another unit accrues. Values derive from wall time, with source revisions blended in either direction. The clock pauses in hidden tabs and catches up on return. Reduced motion disables rolling and updates once per second. Dark is the default; explicit saved light or dark choices are honored.
 
 ## Verification
 

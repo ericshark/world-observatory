@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "World Pulse — A World in Motion",
+  title: "World Observatory — A World in Motion",
   description:
-    "Explore population, GDP, national debt, homicides, and CO₂ through an interactive world map, real published data, and continuously moving estimates.",
+    "Explore population, GDP, government debt and CO₂ through an interactive world map, real published data, and continuously moving estimates.",
 };
 
 // Runs before first paint so a stored theme choice never flashes the wrong theme.
