@@ -51,11 +51,11 @@ export function heatColor(position: number) {
 }
 /**
  * `log` suits totals spanning many orders of magnitude, `linear` suits bounded
- * ratios, and `clipped` is linear between the 2nd and 98th percentiles so a few
+ * ratios, and `clipped` is linear between the 5th and 90th percentiles so a few
  * hyperinflation outliers cannot flatten every other country into one color.
  */
 export type HeatScaleKind = "log" | "linear" | "clipped";
-const CLIP_QUANTILES = [0.02, 0.98] as const;
+const CLIP_QUANTILES = [0.05, 0.9] as const;
 function quantile(sorted: number[], q: number) {
   const index = (sorted.length - 1) * q;
   const low = Math.floor(index);
@@ -89,10 +89,18 @@ export function createHeatScale(
     kind === "log" ? (v: number) => Math.expm1(v) * pivot : (v: number) => v;
   const lo = transform(domain[0]),
     hi = transform(domain[1]);
+  // Rounding absorbs floating-point error in tick inversion, so a legend tick
+  // and a country holding exactly that value always share one color.
   const position = (value: number) =>
     hi === lo
       ? 0.5
-      : Math.max(0, Math.min(1, (transform(value) - lo) / (hi - lo)));
+      : Math.max(
+          0,
+          Math.min(
+            1,
+            Math.round(((transform(value) - lo) / (hi - lo)) * 1e9) / 1e9,
+          ),
+        );
   return {
     min,
     max,

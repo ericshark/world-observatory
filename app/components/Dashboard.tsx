@@ -1,33 +1,57 @@
 "use client";
 
-import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  formatMeasure,
-  formatNumber,
-  modelFor,
-  parseSelection,
-  perSecondFor,
-  utcDay,
-  valueAt,
-} from "../lib/metrics";
-import { COUNTERS, normalizeSelection } from "../lib/observatory";
-import type {
-  Dataset,
-  MetricSelection,
-  MetricsResponse,
-} from "../lib/metrics-types";
-import {
-  createHeatScale,
-  DEBT_MEASURES,
-  mapValue,
-  parseMapMeasure,
-  type MapMeasure,
-} from "../lib/heat-map";
-import { validateDataset } from "../lib/providers";
-import MetricCounter from "./MetricCounter";
-import GeographicMap from "./GeographicMap";
-import ThemeToggle from "./ThemeToggle";
+  CATALOG,
+  DEFAULT_ENTRY,
+  entryById,
+  entryFromQuery,
+  entryHistory,
+  formatEntry,
+  latestChange,
+  modelForEntry,
+  readEntry,
+  type CatalogEntry,
+  type Reading,
+} from "../lib/catalog";
+import { createHeatScale, heatColor } from "../lib/heat-map";
+import { utcDay } from "../lib/metrics";
+import type { Dataset } from "../lib/metrics-types";
+import { COUNTERS } from "../lib/observatory";
+import ActiveReadout from "./hud/ActiveReadout";
+import CountryDossier, { type DossierIndicator } from "./hud/CountryDossier";
+import HudTopBar from "./hud/HudTopBar";
+import MetricNavigator, { type EntrySummary } from "./hud/MetricNavigator";
+import RankingsPanel from "./hud/RankingsPanel";
+import SignalDistribution from "./hud/SignalDistribution";
+import TrendPanel from "./hud/TrendPanel";
+import EarthHorizon from "./map/EarthHorizon";
+import IntelMap, { needsLocator, type MapApi } from "./map/IntelMap";
+import { useLiveDataset } from "./useLiveDataset";
+
+const WORLD = "WORLD";
+const DOSSIER_IDS = [
+  "population",
+  "gdp-per-capita",
+  "life-expectancy",
+  "urbanization",
+  "inflation",
+  "unemployment",
+  "debt-to-gdp",
+  "co2",
+];
+/** Model estimates move slowly; recomputing every country twice a minute is plenty. */
+const RECOMPUTE_MS = 30_000;
+const GRADIENT = `linear-gradient(90deg, ${[0, 0.2, 0.4, 0.6, 0.8, 1].map(heatColor).join(", ")})`;
+
+function sourceLabel(entry: CatalogEntry, data: Dataset) {
+  const { imf, worldbank } = data.sources;
+  if (entry.source === "imf")
+    return `${imf.label} · ${imf.updatedAt.split(" ")[0]}`;
+  if (entry.source === "worldbank")
+    return `${worldbank.label} · ${worldbank.updatedAt}`;
+  return "IMF World Economic Outlook + World Bank WDI";
+}
 
 export default function Dashboard({
   initialData,
@@ -36,29 +60,22 @@ export default function Dashboard({
   initialData: Dataset;
   referenceTime: number;
 }) {
-  const [data, setData] = useState(initialData);
-  const [selection, setSelection] = useState<MetricSelection>(
-    COUNTERS[0].selection,
-  );
-  const [mapMeasure, setMapMeasure] = useState<MapMeasure>("total");
+  const { data, status } = useLiveDataset(initialData);
+  const [entryId, setEntryId] = useState(DEFAULT_ENTRY.id);
   const [country, setCountry] = useState<string | null>(null);
   const [now, setNow] = useState(referenceTime);
   const [ready, setReady] = useState(false);
-  const [query, setQuery] = useState("");
-  const [failed, setFailed] = useState(false);
+  const mapApi = useRef<MapApi>(null);
+  const cursor = useRef<HTMLSpanElement>(null);
+  const zoomLabel = useRef<HTMLSpanElement>(null);
+
   useEffect(() => {
     const restore = () => {
-      const parsed = parseSelection(
-        new URLSearchParams(location.search),
-        initialData,
-      );
-      setSelection(normalizeSelection(parsed.selection));
-      setCountry(parsed.country);
-      setMapMeasure(
-        parseMapMeasure(
-          new URLSearchParams(location.search).get("mapMeasure"),
-          parsed.selection.metric,
-        ),
+      const query = new URLSearchParams(location.search);
+      const iso = query.get("country");
+      setEntryId(entryFromQuery(query).id);
+      setCountry(
+        iso && initialData.countries.some((c) => c.iso2 === iso) ? iso : null,
       );
       setNow(Date.now());
       setReady(true);
@@ -70,100 +87,79 @@ export default function Dashboard({
   useEffect(() => {
     if (!ready) return;
     const url = new URL(location.href);
-    for (const [key, value] of Object.entries({
-      metric: selection.metric,
-      view: selection.populationView,
-      period: selection.period,
-      measure: "total",
-    }))
-      url.searchParams.set(key, value);
-    url.searchParams.delete("compare");
-    if (selection.metric === "debt" && mapMeasure !== "total")
-      url.searchParams.set("mapMeasure", mapMeasure);
-    else url.searchParams.delete("mapMeasure");
+    for (const legacy of ["view", "period", "measure", "mapMeasure", "compare"])
+      url.searchParams.delete(legacy);
+    url.searchParams.set("metric", entryId);
     if (country) url.searchParams.set("country", country);
     else url.searchParams.delete("country");
     history.replaceState(null, "", url);
-  }, [selection, country, mapMeasure, ready]);
+  }, [entryId, country, ready]);
   useEffect(() => {
-    const controller = new AbortController();
-    let active = false;
-    const refresh = async () => {
-      if (document.hidden || active) return;
-      active = true;
-      setNow(Date.now());
-      try {
-        const response = await fetch("/api/metrics", {
-          signal: controller.signal,
-        });
-        if (!response.ok) throw new Error("Refresh failed");
-        const result: MetricsResponse = await response.json();
-        if (!validateDataset(result.dataset))
-          throw new Error("Invalid dataset");
-        if (!controller.signal.aborted) {
-          setData((previous) =>
-            previous.fetchedAt === result.dataset.fetchedAt
-              ? previous
-              : result.dataset,
-          );
-          setFailed(result.refreshFailed);
-        }
-      } catch {
-        if (!controller.signal.aborted) setFailed(true);
-      } finally {
-        active = false;
-      }
-    };
-    void refresh();
-    const timer = setInterval(refresh, 300_000);
-    // Rankings share the displayed counter's period and catch calendar boundaries.
-    const tick = setInterval(() => {
+    const tick = () => {
       if (!document.hidden) setNow(Date.now());
-    }, 1000);
-    document.addEventListener("visibilitychange", refresh);
+    };
+    const timer = setInterval(tick, RECOMPUTE_MS);
+    document.addEventListener("visibilitychange", tick);
     return () => {
-      controller.abort();
       clearInterval(timer);
-      clearInterval(tick);
-      document.removeEventListener("visibilitychange", refresh);
+      document.removeEventListener("visibilitychange", tick);
     };
   }, []);
-  const currentCard = COUNTERS.find(
-    (c) =>
-      c.selection.metric === selection.metric &&
-      c.selection.populationView === selection.populationView,
-  )!;
-  const selected = data.countries.find((c) => c.iso2 === country);
-  const modelDay = utcDay(now);
-  const overviewModels = useMemo(
-    () =>
-      COUNTERS.map((card) =>
-        modelFor(data.world, card.selection, modelDay, data.forecastFrom),
-      ),
-    [data, modelDay],
-  );
+
+  const entry = entryById(entryId);
+  const day = utcDay(now);
+  const entities = useMemo(() => [...data.countries, data.world], [data]);
   const models = useMemo(
     () =>
       new Map(
-        [...data.countries, data.world].map((c) => [
-          c.iso2,
-          modelFor(c, selection, modelDay, data.forecastFrom),
+        CATALOG.map((e) => [
+          e.id,
+          new Map(
+            entities.map((c) => [
+              c.iso2,
+              modelForEntry(e, c, day, data.forecastFrom),
+            ]),
+          ),
         ]),
       ),
-    [data, selection, modelDay],
+    [entities, day, data.forecastFrom],
   );
+  const readings = useMemo(
+    () =>
+      new Map(
+        CATALOG.map((e) => [
+          e.id,
+          new Map(
+            entities.map((c) => [
+              c.iso2,
+              readEntry(e, c, models.get(e.id)!.get(c.iso2) ?? null, now),
+            ]),
+          ),
+        ]),
+      ),
+    [entities, models, now],
+  );
+  const active = readings.get(entry.id)!;
   const values = useMemo(
     () =>
       new Map(
-        data.countries.map((c) => {
-          const m = models.get(c.iso2);
-          return [
-            c.iso2,
-            m && !m.historical ? valueAt(m, selection, now) : null,
-          ];
+        data.countries.map((c) => [c.iso2, active.get(c.iso2)?.value ?? null]),
+      ),
+    [data, active],
+  );
+  const scale = useMemo(
+    () => createHeatScale(values.values(), entry.scale),
+    [values, entry.scale],
+  );
+  const colors = useMemo(
+    () =>
+      new Map(
+        [...values].flatMap(([iso, value]) => {
+          const color = scale.color(value);
+          return color ? [[iso, color] as [string, string]] : [];
         }),
       ),
-    [data, models, selection, now],
+    [values, scale],
   );
   const ranked = useMemo(
     () =>
@@ -172,317 +168,278 @@ export default function Dashboard({
         .sort((a, b) => values.get(b.iso2)! - values.get(a.iso2)!),
     [data, values],
   );
-  const leaders = ranked.slice(0, 7);
-  const mapSelection = useMemo(
+  const summaries = useMemo(
     () =>
-      ({
-        ...selection,
-        measure: selection.metric === "debt" ? mapMeasure : "total",
-      }) as MetricSelection,
-    [selection, mapMeasure],
-  );
-  const mapValues = useMemo(
-    () =>
-      new Map(
-        data.countries.map((c) => [
-          c.iso2,
-          mapValue(models.get(c.iso2), mapSelection, now),
+      new Map<string, EntrySummary>(
+        CATALOG.map((e) => [
+          e.id,
+          {
+            value: readings.get(e.id)!.get(WORLD)?.value ?? null,
+            change: latestChange(
+              entryHistory(e, data.world, data.forecastFrom, day),
+              e,
+            ),
+          },
         ]),
       ),
-    [data, models, mapSelection, now],
+    [readings, data, day],
   );
-  const heatScale = useMemo(
+  const locators = useMemo(
     () =>
-      createHeatScale(
-        mapValues.values(),
-        mapSelection.measure === "debtRatio" ? "linear" : "log",
+      data.countries.flatMap((c) =>
+        c.coordinates && needsLocator(c.iso2)
+          ? [{ iso: c.iso2, coordinates: c.coordinates }]
+          : [],
       ),
-    [mapValues, mapSelection],
+    [data],
   );
-  const colors = useMemo(
-    () =>
-      new Map(
-        [...mapValues].flatMap(([iso, value]) => {
-          const color = heatScale.color(value);
-          return color ? [[iso, color] as [string, string]] : [];
-        }),
-      ),
-    [mapValues, heatScale],
-  );
-  const model = models.get(selected?.iso2 ?? data.world.iso2) ?? null;
-  const onSelect = useCallback((iso: string | null) => setCountry(iso), []);
-  const results = query.trim()
-    ? data.countries
-        .filter((c) =>
-          `${c.name} ${c.iso2} ${c.iso3}`
-            .toLowerCase()
-            .includes(query.trim().toLowerCase()),
-        )
-        .slice(0, 8)
-    : [];
-  const periodKey =
-    selection.period === "today" ? utcDay(now) : new Date(now).getUTCFullYear();
-  const currency = selection.metric === "gdp" || selection.metric === "debt";
-  return (
-    <main className="observatory">
-      <header className="site-header">
-        <Link className="brand" href="/">
-          ◉ <span>WORLD OBSERVATORY</span>
-        </Link>
-        <div className="header-actions">
-          <span className="live-badge">
-            <i /> LIVE ESTIMATES
-          </span>
-          <ThemeToggle />
-        </div>
-      </header>
-      <section className="explorer" aria-label="World statistics explorer">
-        <div className="summary-panel">
-          <div className="scope-row">
-            <span>{selected?.name ?? "Worldwide"}</span>
-            {selected && (
-              <button onClick={() => setCountry(null)}>← Back to world</button>
-            )}
-          </div>
-          <h1>{currentCard.label}</h1>
-          <div className={`hero-counter ${currency ? "is-currency" : ""}`}>
-            {currency && model ? "$" : ""}
-            <MetricCounter
-              key={`${country}-${currentCard.id}-${selection.metric === "debt" ? "stock" : periodKey}`}
-              model={model}
-              selection={selection}
-            />
-          </div>
-          <p className="counter-unit">
-            {currentCard.unit}{" "}
-            <span>
-              ·{" "}
-              {model?.historical
-                ? `Historical observation, ${model.year}`
-                : "modelled estimate"}
-            </span>
-          </p>
-          <div className="rate-strip">
-            {model && !model.historical ? (
-              <>
-                <strong>
-                  {formatNumber(
-                    perSecondFor(model, now),
-                    false,
-                    Math.abs(perSecondFor(model, now)) < 10 ? 2 : 0,
-                  )}
-                </strong>
-                <span>
-                  {currency
-                    ? "USD"
-                    : selection.metric === "co2"
-                      ? "tonnes"
-                      : "people"}{" "}
-                  / second{selection.metric === "debt" ? " · model trend" : ""}
-                </span>
-              </>
-            ) : (
-              <span>
-                {model
-                  ? "Historical data · no current estimate"
-                  : "Data unavailable for this country"}
-              </span>
-            )}
-          </div>
-          <div className="hero-leaders">
-            <h2>
-              TOP COUNTRIES <span>{currentCard.period}</span>
-            </h2>
-            {leaders.map((c) => (
-              <button
-                key={c.iso2}
-                onClick={() => setCountry(c.iso2)}
-                aria-pressed={country === c.iso2}
-              >
-                <i style={{ background: "var(--ink-muted)" }} />
-                <span
-                  className="leader-code"
-                  style={{ color: "var(--ink-muted)" }}
-                >
-                  {c.iso2}
-                </span>
-                <span className="leader-name">{c.name}</span>
-                <strong>{formatMeasure(values.get(c.iso2)!, selection)}</strong>
-              </button>
-            ))}
-          </div>
-          <label className="search-box">
-            <span>⌕</span>
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Find a country"
-              aria-label="Find a country"
-            />
-          </label>
-          {query.trim() && (
-            <div className="search-results" aria-label="Country search results">
-              {results.length ? (
-                results.map((c) => (
-                  <button
-                    key={c.iso2}
-                    onClick={() => {
-                      setCountry(c.iso2);
-                      setQuery("");
-                    }}
-                  >
-                    {c.name}
-                    <span>{c.iso2}</span>
-                  </button>
-                ))
-              ) : (
-                <p>No countries found.</p>
-              )}
-            </div>
-          )}
-        </div>
-        <div className="map-panel">
-          <div className="map-topline">
-            <span>
-              {currentCard.label.toUpperCase()}{" "}
-              <b>
-                {" "}
-                /{" "}
-                {mapSelection.measure === "debtRatio"
-                  ? "SOURCE YEAR"
-                  : currentCard.period.toUpperCase()}
-              </b>
-            </span>
-            <span>{heatScale.count} countries with data</span>
-          </div>
-          {selection.metric === "debt" && (
-            <div
-              className="map-measures"
-              role="group"
-              aria-label="Debt map measure"
-            >
-              {DEBT_MEASURES.map((measure) => (
-                <button
-                  key={measure.id}
-                  aria-pressed={mapMeasure === measure.id}
-                  onClick={() => setMapMeasure(measure.id)}
-                >
-                  {measure.label}
-                </button>
-              ))}
-            </div>
-          )}
-          <GeographicMap
-            countries={data.countries}
-            models={models}
-            values={mapValues}
-            selection={mapSelection}
-            selectedIso={country}
-            colors={colors}
-            onSelect={onSelect}
-            source={
-              selection.metric === "debt" || selection.metric === "gdp"
-                ? data.sources.imf
-                : data.sources.worldbank
+  const selected = data.countries.find((c) => c.iso2 === country) ?? null;
+  const scope = selected ?? data.world;
+  const scopeReading = active.get(scope.iso2) ?? null;
+  const ranks = useMemo(() => {
+    if (!selected)
+      return {
+        global: null,
+        regional: null,
+        share: null,
+        coverage: ranked.length,
+      };
+    const region = ranked.filter((c) => c.region === selected.region);
+    const index = ranked.findIndex((c) => c.iso2 === selected.iso2);
+    const regionalIndex = region.findIndex((c) => c.iso2 === selected.iso2);
+    const value = values.get(selected.iso2);
+    const world = active.get(WORLD)?.value;
+    return {
+      global: index >= 0 ? { rank: index + 1, of: ranked.length } : null,
+      regional:
+        regionalIndex >= 0
+          ? {
+              rank: regionalIndex + 1,
+              of: region.length,
+              region: selected.region,
             }
+          : null,
+      share: value != null && world ? value / world : null,
+      coverage: ranked.length,
+    };
+  }, [selected, ranked, values, active]);
+  const indicators = useMemo<DossierIndicator[]>(
+    () =>
+      DOSSIER_IDS.map((id) => {
+        const byIso = readings.get(id)!;
+        const reading = byIso.get(scope.iso2) ?? null;
+        let percentile: number | null = null;
+        if (selected && reading?.value != null) {
+          const all = data.countries
+            .map((c) => byIso.get(c.iso2)?.value)
+            .filter((v): v is number => v != null);
+          percentile =
+            all.filter((v) => v <= reading.value!).length / all.length;
+        }
+        return { entry: entryById(id), reading, percentile };
+      }),
+    [readings, scope, selected, data],
+  );
+  const trend = useMemo(
+    () => entryHistory(entry, scope, data.forecastFrom, day),
+    [entry, scope, data.forecastFrom, day],
+  );
+  const years = useMemo(() => {
+    const observed = data.countries
+      .map((c) => active.get(c.iso2))
+      .filter((r): r is Reading => r?.value != null && r.year !== null)
+      .map((r) => r.year!);
+    return observed.length
+      ? ([Math.min(...observed), Math.max(...observed)] as [number, number])
+      : null;
+  }, [data, active]);
+  const counterModels = COUNTERS.map(
+    (counter) => models.get(counter.id)?.get(WORLD) ?? null,
+  );
+
+  const pickEntry = useCallback((id: string) => setEntryId(id), []);
+  const focusCountry = useCallback((iso: string | null) => {
+    setCountry(iso);
+    if (iso) mapApi.current?.focus(iso);
+  }, []);
+  const onMapSelect = useCallback(
+    (iso: string | null) =>
+      setCountry(
+        iso && initialData.countries.some((c) => c.iso2 === iso) ? iso : null,
+      ),
+    [initialData],
+  );
+  const onZoom = useCallback((zoom: number) => {
+    if (zoomLabel.current)
+      zoomLabel.current.textContent = `Z ${zoom.toFixed(1)}`;
+  }, []);
+  const renderTooltip = (iso: string, name: string) => {
+    const entity = data.countries.find((c) => c.iso2 === iso);
+    const reading = active.get(iso);
+    const index = ranked.findIndex((c) => c.iso2 === iso);
+    return (
+      <>
+        <div className="tooltip-head">
+          <span>{entity?.iso3 ?? iso}</span>
+          <strong>{entity?.name ?? name}</strong>
+        </div>
+        <p className="tooltip-label">{entry.label}</p>
+        <b>
+          {formatEntry(entry, reading?.value ?? null)}{" "}
+          <small>{entry.unit}</small>
+        </b>
+        <p>
+          {!reading || reading.year === null
+            ? "No published data"
+            : reading.historical
+              ? `Last observation ${reading.year} · historical, not mapped`
+              : `${reading.year}${reading.forecast ? " · IMF forecast" : " source year"}${entry.kind === "live" && entry.counter ? " · modelled estimate" : ""}`}
+        </p>
+        {reading?.populationYear != null &&
+          entry.kind === "live" &&
+          !entry.counter && <p>Population basis {reading.populationYear}</p>}
+        {index >= 0 && (
+          <p>
+            Rank #{index + 1} of {ranked.length}
+          </p>
+        )}
+        <small>
+          {entity ? "Click to open dossier" : "No statistical record"}
+        </small>
+      </>
+    );
+  };
+
+  return (
+    <main className="ops">
+      <HudTopBar
+        models={counterModels}
+        activeId={entry.id}
+        onPick={pickEntry}
+        status={status}
+        periodKeys={{ day, year: new Date(now).getUTCFullYear() }}
+      />
+      <div className="ops-stage">
+        <div className="ops-viewport">
+          <EarthHorizon />
+          <IntelMap
+            ref={mapApi}
+            colors={colors}
+            transitionKey={entry.id}
+            selectedIso={country}
+            locators={locators}
+            onSelect={onMapSelect}
+            renderTooltip={renderTooltip}
+            readout={cursor}
+            onZoom={onZoom}
           />
-          <div
-            className="heat-legend"
-            aria-label={`${heatScale.kind} heat scale`}
-          >
-            <div className="legend-heading">
+          <div className="theatre-hud">
+            <div className="theatre-title">
+              <span className="theatre-code">◢ Global monitoring</span>
+              <strong>{entry.label}</strong>
               <span>
-                {mapSelection.measure === "debtRatio"
-                  ? "% of GDP"
-                  : mapSelection.measure === "perCapita"
-                    ? "USD / person"
-                    : currentCard.unit}{" "}
-                · {heatScale.kind.toLowerCase()} scale
-              </span>
-              <span>
-                <i className="missing-swatch" />
-                No current data
+                {scale.count} countries
+                {years
+                  ? ` · ${years[0] === years[1] ? years[0] : `${years[0]}–${years[1]}`}`
+                  : ""}
               </span>
             </div>
-            {heatScale.count > 0 ? (
-              <>
-                <div
-                  className="heat-gradient"
-                  style={{
-                    background: `linear-gradient(to right, ${[0, 1, 2, 3, 4].map((i) => heatScale.color(heatScale.ticks.length === 1 ? heatScale.min : heatScale.ticks[i])).join(", ")})`,
-                  }}
-                />
-                <div
-                  className={`legend-ticks ${heatScale.ticks.length === 1 ? "single" : ""}`}
-                >
-                  {heatScale.ticks.map((value, i) => (
-                    <span key={i}>{formatMeasure(value, mapSelection)}</span>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <p>No current data for this measure</p>
-            )}
-          </div>
-          <p className="map-caption">
-            Drag to explore · Scroll to zoom · Click a country
-            <span>
-              Country color shows the selected measure, not a risk rating.
-            </span>
-          </p>
-        </div>
-      </section>
-      <section
-        className="overview-section"
-        aria-label="Worldwide live estimates"
-      >
-        <div className="section-heading">
-          <h2>THE WORLD, IN MOTION</h2>
-          <span>Worldwide · select a statistic to explore</span>
-        </div>
-        <div className="live-grid">
-          {COUNTERS.map((card, index) => {
-            const m = overviewModels[index];
-            return (
+            <div
+              className="theatre-controls"
+              role="group"
+              aria-label="Map view"
+            >
               <button
-                className={`live-card ${["gdp", "debt"].includes(card.id) ? "economic-card" : ""} ${card.id === currentCard.id ? "active" : ""}`}
-                aria-pressed={card.id === currentCard.id}
-                key={card.id}
-                onClick={() => {
-                  setSelection(card.selection);
-                  setMapMeasure("total");
-                  setCountry(null);
-                  setQuery("");
-                }}
+                onClick={() => mapApi.current?.zoomIn()}
+                aria-label="Zoom in"
               >
-                <span className="live-card-label">
-                  {card.label}
-                  <span>↗</span>
-                </span>
-                <strong>
-                  {m && ["gdp", "debt"].includes(card.selection.metric)
-                    ? "$"
-                    : ""}
-                  <MetricCounter
-                    key={`${card.id}-${card.id === "debt" ? "stock" : card.selection.period === "today" ? modelDay : new Date(now).getUTCFullYear()}`}
-                    model={m}
-                    selection={card.selection}
-                  />
-                </strong>
-                <span className="live-card-unit">
-                  {card.unit} · {card.period}
-                </span>
+                +
               </button>
-            );
-          })}
+              <button
+                onClick={() => mapApi.current?.zoomOut()}
+                aria-label="Zoom out"
+              >
+                −
+              </button>
+              <button
+                onClick={() => mapApi.current?.reset()}
+                aria-label="Reset map to world view"
+              >
+                ⌂
+              </button>
+            </div>
+            <div className="theatre-legend" aria-hidden="true">
+              <span>
+                {scale.clippedLow ? "≤" : ""}
+                {formatEntry(entry, scale.ticks[0] ?? null)}
+              </span>
+              <i style={{ background: GRADIENT }} />
+              <span>
+                {scale.clippedHigh ? "≥" : ""}
+                {formatEntry(
+                  entry,
+                  scale.ticks[scale.ticks.length - 1] ?? null,
+                )}
+              </span>
+            </div>
+            <div className="theatre-readout" aria-hidden="true">
+              <span ref={cursor}>—</span>
+              <span ref={zoomLabel}>Z —</span>
+            </div>
+            <p className="theatre-credit">
+              Night lights: NASA Black Marble 2016 composite (VIIRS via GIBS) ·
+              Boundaries: Natural Earth, illustrative · Colors show values, not
+              risk
+            </p>
+          </div>
         </div>
-      </section>
+        <aside className="rail rail-left" aria-label="Signal controls">
+          <ActiveReadout
+            entry={entry}
+            scopeName={scope.name}
+            reading={scopeReading}
+            now={now}
+            sourceLabel={sourceLabel(entry, data)}
+          />
+          <MetricNavigator
+            active={entry}
+            summaries={summaries}
+            onPick={pickEntry}
+          />
+          <SignalDistribution
+            entry={entry}
+            scale={scale}
+            values={ranked.map((c) => values.get(c.iso2)!)}
+            years={years}
+            missing={data.countries.length - scale.count}
+          />
+        </aside>
+        <aside className="rail rail-right" aria-label="Country intelligence">
+          <CountryDossier
+            entity={selected}
+            entry={entry}
+            reading={scopeReading}
+            ranks={ranks}
+            indicators={indicators}
+            countries={data.countries}
+            onSelect={focusCountry}
+          />
+          <TrendPanel entry={entry} scopeName={scope.name} points={trend} />
+          <RankingsPanel
+            entry={entry}
+            ranked={ranked}
+            values={values}
+            scale={scale}
+            selectedIso={country}
+            onSelect={focusCountry}
+          />
+        </aside>
+      </div>
       <details className="data-details">
         <summary>
           <span>About the data</span>
-          <span className={failed ? "stale" : ""}>
-            {failed
+          <span className={status === "failed" ? "stale" : ""}>
+            {status === "failed"
               ? "Saved data · refresh unavailable"
               : "Published sources · continuous estimates"}{" "}
             ＋
@@ -502,8 +459,8 @@ export default function Dashboard({
             ))}
             <p>
               Snapshot: {new Date(data.fetchedAt).toUTCString()}. Source year
-              for this selection: {model?.year ?? "unavailable"}
-              {model?.forecast ? " (forecast)" : ""}. IMF years from{" "}
+              for this selection: {scopeReading?.year ?? "unavailable"}
+              {scopeReading?.forecast ? " (forecast)" : ""}. IMF years from{" "}
               {data.forecastFrom} are forecasts. Releases are checked daily;
               this page refreshes every five minutes.
             </p>
@@ -519,40 +476,47 @@ export default function Dashboard({
             <p>
               GDP is output generated this year. Government debt interpolates
               consecutive year-end gross debt balances, including currency
-              valuation effects, and may decrease. Debt clocks use continuous
-              interpolation; source revisions reconcile through a bounded rate
-              adjustment and can take time to converge. These are modelled
-              estimates, not official real-time debt measurements. CO₂ is
-              measured in tonnes and excludes land-use change and forestry.
+              valuation effects, and may decrease. Debt clocks are modelled
+              estimates, not official real-time debt measurements. CO₂ excludes
+              land-use change and forestry.
+            </p>
+            <p>
+              Life expectancy, urban share, inflation and unemployment show the
+              latest World Bank observation; values more than five years old are
+              historical and left off the map. Year-over-year changes compare
+              the two latest annual observations, in percent or percentage
+              points (pp); “f” marks an IMF forecast year.
             </p>
           </div>
           <div>
             <h3>Coverage & geography</h3>
             <p>
-              Missing values are unavailable, never zero. Older observations
-              remain historical. World totals use independently published world
-              aggregates and may differ from country sums.
+              Missing values are unavailable, never zero. World totals use
+              independently published world aggregates and may differ from
+              country sums. Totals use a logarithmic color scale and rates a
+              linear one; inflation is linear between the 5th and 90th
+              percentiles so outliers share the end colors.
             </p>
             <p>
-              Natural Earth boundaries are illustrative. Country fills show the
-              selected measure on a logarithmic scale, or a linear scale for
-              debt / GDP. Gray means no current data. Small islands use locator
-              rings. Debt per person uses the population basis year shown in its
-              tooltip; debt / GDP is the published source-year ratio.
+              Natural Earth boundaries are illustrative. The night-lights layer
+              is NASA&apos;s 2016 Black Marble composite served by NASA GIBS;
+              the horizon uses the same imagery. Neither is live.
             </p>
             <p>
               <a href="https://www.worldbank.org/en/about/legal/terms-of-use-for-datasets">
                 World Bank data terms
               </a>{" "}
-              · <a href="https://www.imf.org/external/terms.htm">IMF terms</a>
+              · <a href="https://www.imf.org/external/terms.htm">IMF terms</a> ·{" "}
+              <a href="https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api">
+                NASA GIBS
+              </a>
             </p>
           </div>
         </div>
       </details>
-      <footer>
-        <span>WORLD OBSERVATORY</span>
-        <span>One planet. Continuously changing.</span>
-        <span>OPEN DATA / UTC</span>
+      <footer className="ops-footer">
+        <span>World Observatory</span>
+        <span>Real published data · modelled live estimates · UTC</span>
       </footer>
     </main>
   );

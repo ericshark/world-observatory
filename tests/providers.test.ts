@@ -212,23 +212,23 @@ test("complete provider import paginates, converts IMF billions, joins world agg
   let omitAddedIndicators = false;
   const rowsFor = () =>
     [...fixtures.map((c) => c.iso3), "WLD"].flatMap((iso) =>
-    [2023, 2024].flatMap((year) => [
-      wbRow(iso, "SP.POP.TOTL", 1_000_000, String(year)),
-      wbRow(iso, "SP.DYN.CBRT.IN", 10, String(year)),
-      wbRow(iso, "SP.DYN.CDRT.IN", 5, String(year)),
-      wbRow(iso, "SM.POP.NETM", 0, String(year)),
-      wbRow(iso, "VC.IHR.PSRC.P5", 2, String(year)),
-      wbRow(iso, "EN.GHG.CO2.MT.CE.AR5", 4, String(year)),
-      ...(omitAddedIndicators
-        ? []
-        : [
-            wbRow(iso, "SP.DYN.LE00.IN", 72.5, String(year)),
-            wbRow(iso, "SP.URB.TOTL.IN.ZS", 56, String(year)),
-            wbRow(iso, "FP.CPI.TOTL.ZG", -0.4, String(year)),
-            wbRow(iso, "SL.UEM.TOTL.ZS", 5.1, String(year)),
-          ]),
-    ]),
-  );
+      [2023, 2024].flatMap((year) => [
+        wbRow(iso, "SP.POP.TOTL", 1_000_000, String(year)),
+        wbRow(iso, "SP.DYN.CBRT.IN", 10, String(year)),
+        wbRow(iso, "SP.DYN.CDRT.IN", 5, String(year)),
+        wbRow(iso, "SM.POP.NETM", 0, String(year)),
+        wbRow(iso, "VC.IHR.PSRC.P5", 2, String(year)),
+        wbRow(iso, "EN.GHG.CO2.MT.CE.AR5", 4, String(year)),
+        ...(omitAddedIndicators
+          ? []
+          : [
+              wbRow(iso, "SP.DYN.LE00.IN", 72.5, String(year)),
+              wbRow(iso, "SP.URB.TOTL.IN.ZS", 56, String(year)),
+              wbRow(iso, "FP.CPI.TOTL.ZG", -0.4, String(year)),
+              wbRow(iso, "SL.UEM.TOTL.ZS", 5.1, String(year)),
+            ]),
+      ]),
+    );
   let mixedRelease = false;
   const requests: string[] = [];
   const fetcher: typeof fetch = async (input) => {

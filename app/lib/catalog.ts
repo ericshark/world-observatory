@@ -222,7 +222,7 @@ export const CATALOG: CatalogEntry[] = [
     decimals: 1,
     suffix: "%",
     description:
-      "Annual change in consumer prices (FP.CPI.TOTL.ZG). Colors clip at the 2nd and 98th percentiles.",
+      "Annual change in consumer prices (FP.CPI.TOTL.ZG). Colors clip at the 5th and 90th percentiles.",
   },
   {
     id: "unemployment",

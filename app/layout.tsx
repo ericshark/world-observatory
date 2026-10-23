@@ -1,28 +1,28 @@
-import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import { THEME_STORAGE_KEY } from "./lib/theme";
+import type { Metadata, Viewport } from "next";
+import { Chakra_Petch, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const display = Chakra_Petch({
+  variable: "--font-display",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
 });
 
-const geistMono = Geist_Mono({
+const mono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
-  title: "World Observatory — A World in Motion",
+  title: "World Observatory — Global Intelligence",
   description:
-    "Explore population, GDP, government debt and CO₂ through an interactive world map, real published data, and continuously moving estimates.",
+    "A command-centre view of the world: population, GDP, government debt, inflation, life expectancy and more on a night-lights map, from real published data.",
 };
 
-// Runs before first paint so a stored theme choice never flashes the wrong theme.
-const themeScript = `try{var t=localStorage.getItem(${JSON.stringify(
-  THEME_STORAGE_KEY,
-)});if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}`;
+export const viewport: Viewport = {
+  themeColor: "#05040d",
+  colorScheme: "dark",
+};
 
 export default function RootLayout({
   children,
@@ -30,13 +30,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-      </head>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
+    <html lang="en">
+      <body className={`${display.variable} ${mono.variable} antialiased`}>
         {children}
       </body>
     </html>
