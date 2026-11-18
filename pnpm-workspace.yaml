@@ -14,3 +14,6 @@ minimumReleaseAgeExclude:
   - next@16.4.5
   - '@next/eslint-plugin-next@16.4.5'
   - eslint-config-next@16.4.5
+
+overrides:
+  postcss: 8.5.33
